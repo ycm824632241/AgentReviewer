@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>AI 论文审稿系统</h1>
+<form action="/upload" method="post" enctype="multipart/form-data">
+  <input type="file" name="file" accept=".txt,.pdf">
+  <button type="submit">上传论文</button>
+</form>
+{% endblock %}

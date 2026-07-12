@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>审稿历史</h1>
+<ul>{% for t in threads %}<li>{{ t.thread_id }}</li>{% else %}<li>暂无</li>{% endfor %}</ul>
+{% endblock %}
