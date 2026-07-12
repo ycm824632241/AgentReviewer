@@ -293,6 +293,31 @@ class TestIntegration:
         # 不会写入 rebuttal_history，且不会校验 round_number → 此处断言即可捕获 C1。
         assert result["eic_report"]["reviewer_role"] == "EIC"
 
+    def test_round2_all_rebuttal_reviewers_append_history(self):
+        """rebuttal_target=all 并行重跑 5 个 rebuttal 节点时，history 必须合并而非冲突。"""
+        app = build_rebuttal_graph(db_path=_tmp_db())
+        state = ReviewState(
+            paper=_MINIMAL_PAPER, paper_title="t", language="zh",
+            primary_discipline="计算机科学", secondary_disciplines=[], research_paradigm="",
+            methodology_type="", target_journal_tier="Q1",
+            reviewer_configs=json.loads(_FIELD_CONFIG_JSON)["reviewer_configs"],
+            eic_report={**json.loads(_REPORT_JSON), "reviewer_role": "EIC"},
+            methodology_report={**json.loads(_REPORT_JSON), "reviewer_role": "Methodology"},
+            domain_report={**json.loads(_REPORT_JSON), "reviewer_role": "Domain"},
+            perspective_report={**json.loads(_REPORT_JSON), "reviewer_role": "Perspective"},
+            devils_advocate_report={**json.loads(_DA_JSON), "reviewer_role": "DevilsAdvocate"},
+            editorial_decision="", consensus_analysis=None, dimension_scores=None,
+            revision_roadmap=None, round_number=2, rebuttal_text="作者统一回应所有评审意见。",
+            rebuttal_target="all", rebuttal_history=[],
+        )
+        with _patch_llm():
+            result = app.invoke(state, config={"configurable": {"thread_id": "r2-all-it"}})
+
+        roles = {entry["role"] for entry in result["rebuttal_history"]}
+        assert roles == {"eic", "methodology", "domain", "perspective", "devils_advocate"}
+        assert all(entry["round"] == 2 for entry in result["rebuttal_history"])
+        assert len(result["rebuttal_history"]) == 5
+
 
 def _tmp_db():
     """每个测试用独立的临时 checkpointer DB，避免互相干扰 + 便于清理。"""

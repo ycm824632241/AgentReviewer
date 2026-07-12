@@ -98,7 +98,6 @@ def build_rebuttal_report_node(role: str) -> Callable:
         return {
             report_key: new_report,
             "rebuttal_history": [
-                *state.get("rebuttal_history", []),
                 {
                     "round": state["round_number"],
                     "role": role,

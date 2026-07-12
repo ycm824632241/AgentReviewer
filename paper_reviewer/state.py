@@ -1,4 +1,5 @@
-from typing import TypedDict, List, Optional, Literal
+import operator
+from typing import Annotated, TypedDict, List, Optional, Literal
 
 class ReviewerConfig(TypedDict):
     role: str
@@ -60,4 +61,4 @@ class ReviewState(TypedDict):
     round_number: int                   # 当前轮次，1-based
     rebuttal_text: Optional[str]        # 作者申诉正文
     rebuttal_target: Optional[str]     # "eic"/"methodology"/"domain"/"perspective"/"devils_advocate"/"all"/None
-    rebuttal_history: List[dict]        # [{round, target, text, persuasion, adjustment}]
+    rebuttal_history: Annotated[List[dict], operator.add]  # [{round, target, text, persuasion, adjustment}]
