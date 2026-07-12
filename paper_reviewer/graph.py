@@ -133,10 +133,10 @@ def _route_rebuttal(state: dict) -> List[str]:
     """根据 rebuttal_target 决定重跑哪些审稿人，然后进入 synthesizer。"""
     target = state.get("rebuttal_target", "all")
     if target == "all":
-        return _REVIEWER_NAMES
+        return list(_REVIEWER_NAMES)
     if target in _REVIEWER_NAMES:
         return [target]
-    return _REVIEWER_NAMES
+    return list(_REVIEWER_NAMES)
 
 
 def build_rebuttal_graph(db_path: str = None):
@@ -155,11 +155,17 @@ def build_rebuttal_graph(db_path: str = None):
     for name in _REVIEWER_NAMES:
         g.add_node(f"rebuttal_{name}", build_rebuttal_report_node(name))
 
-    # 条件入口：round_number == 1 走 field_analyst；>= 2 走 rebuttal_*
+    # 条件入口：round_number == 1 走 field_analyst（它构建 reviewer_configs/rag_index）；>= 2 走 rebuttal_* 节点
     def route_entry(state: dict):
-        return _REVIEWER_NAMES if state.get("round_number", 1) == 1 else _route_rebuttal(state)
+        if state.get("round_number", 1) == 1:
+            return ["field_analyst"]
+        return [f"rebuttal_{n}" for n in _route_rebuttal(state)]
 
     g.set_conditional_entry_point(route_entry)
+
+    # Phase 0 → Phase 1：field_analyst 为每位审稿人生成配置后并行进入审稿人
+    for name in _REVIEWER_NAMES:
+        g.add_edge("field_analyst", name)
 
     # Round 1 审稿人 → synthesizer
     for name in _REVIEWER_NAMES:

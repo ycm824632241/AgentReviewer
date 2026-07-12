@@ -12,15 +12,16 @@ def _extract_json(text: str) -> str:
     if match:
         return match.group(1).strip()
 
-    # 尝试非贪婪提取 { ... }
-    match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL)
-    if match:
-        candidate = match.group(0)
+    # 优先用标准 JSONDecoder 从每个候选起点解析完整对象。
+    # 这能正确处理 new_report 这类多层嵌套 JSON，避免正则误取内层对象。
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        start = match.start()
         try:
-            json.loads(candidate)
-            return candidate
+            _, end = decoder.raw_decode(text[start:])
+            return text[start:start + end]
         except json.JSONDecodeError:
-            pass
+            continue
 
     # 回退：贪婪匹配 + 截断修复
     match = re.search(r"\{.*", text, re.DOTALL)

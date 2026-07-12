@@ -36,11 +36,11 @@ _VALID_ROLES = set(ROLE_TO_PROMPT.keys())
 
 REBUTTAL_OUTPUT_SCHEMA = """
 输出 JSON：
-{
+{{
   "persuasion_level": "fully_persuaded | partially_persuaded | not_persuaded",
   "adjustment_reason": "基于申诉中的第X点，原评分中的Y问题已被解释清楚...",
-  "new_report": { 原审稿报告的完整 schema }
-}
+  "new_report": {{ 原审稿报告的完整 schema }}
+}}
 """
 
 
