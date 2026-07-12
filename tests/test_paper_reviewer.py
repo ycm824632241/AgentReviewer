@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from paper_reviewer.state import ReviewState
 from paper_reviewer.rubrics import calculate_weighted_score, score_to_decision
 from paper_reviewer.graph import build_review_graph
+from paper_reviewer.graph import build_rebuttal_graph, _route_rebuttal
 
 
 class TestRubrics:
@@ -102,3 +103,25 @@ class TestGraph:
         assert result["eic_report"] is not None
         assert result["devils_advocate_report"] is not None
         assert result["dimension_scores"] is not None
+
+
+class TestRebuttalGraph:
+    def test_rebuttal_graph_compiles(self):
+        app = build_rebuttal_graph()
+        assert app is not None
+
+    def test_route_all_reviewers(self):
+        out = _route_rebuttal({"rebuttal_target": "all"})
+        assert set(out) == {"eic", "methodology", "domain", "perspective", "devils_advocate"}
+
+    def test_route_single_reviewer(self):
+        out = _route_rebuttal({"rebuttal_target": "eic"})
+        assert out == ["eic"]
+
+    def test_route_unknown_target_defaults_to_all(self):
+        out = _route_rebuttal({"rebuttal_target": "nonsense"})
+        assert set(out) == {"eic", "methodology", "domain", "perspective", "devils_advocate"}
+
+    def test_route_missing_target_defaults_to_all(self):
+        out = _route_rebuttal({})
+        assert set(out) == {"eic", "methodology", "domain", "perspective", "devils_advocate"}

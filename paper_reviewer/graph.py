@@ -1,3 +1,5 @@
+from typing import List
+
 from langgraph.graph import StateGraph, END
 from paper_reviewer.checkpoint import get_checkpointer
 from paper_reviewer.state import ReviewState
@@ -8,6 +10,7 @@ from paper_reviewer.agents.domain_reviewer import domain_reviewer_node
 from paper_reviewer.agents.perspective_reviewer import perspective_reviewer_node
 from paper_reviewer.agents.devils_advocate import devils_advocate_node
 from paper_reviewer.agents.synthesizer import synthesizer_node
+from paper_reviewer.agents.rebuttal_reviewer import build_rebuttal_report_node
 from paper_reviewer.utils import with_retry
 
 
@@ -120,3 +123,54 @@ def build_review_graph_with_checkpoint(use_rag: bool = True, db_path: str = None
 
     cp = get_checkpointer(db_path) if db_path else get_checkpointer()
     return graph.compile(checkpointer=cp)
+
+
+# ── Rebuttal conditional-entry graph ────────────────────────────────────────
+_REVIEWER_NAMES = ["eic", "methodology", "domain", "perspective", "devils_advocate"]
+
+
+def _route_rebuttal(state: dict) -> List[str]:
+    """根据 rebuttal_target 决定重跑哪些审稿人，然后进入 synthesizer。"""
+    target = state.get("rebuttal_target", "all")
+    if target == "all":
+        return _REVIEWER_NAMES
+    if target in _REVIEWER_NAMES:
+        return [target]
+    return _REVIEWER_NAMES
+
+
+def build_rebuttal_graph(db_path: str = None):
+    """编译含 rebuttal 路径的图。Round 1 不变；Round 2 走 rebuttal_* 节点。"""
+    g = StateGraph(ReviewState)
+    # Round 1 节点
+    g.add_node("field_analyst", with_retry(field_analyst_node))
+    for name in _REVIEWER_NAMES:
+        fn = {"eic": eic_node, "methodology": methodology_reviewer_node,
+              "domain": domain_reviewer_node, "perspective": perspective_reviewer_node,
+              "devils_advocate": devils_advocate_node}[name]
+        g.add_node(name, _make_reviewer_lambda(fn))
+    g.add_node("synthesizer", with_retry(synthesizer_node))
+
+    # Round 2 rebuttal 节点
+    for name in _REVIEWER_NAMES:
+        g.add_node(f"rebuttal_{name}", build_rebuttal_report_node(name))
+
+    # 条件入口：round_number == 1 走 field_analyst；>= 2 走 rebuttal_*
+    def route_entry(state: dict):
+        return _REVIEWER_NAMES if state.get("round_number", 1) == 1 else _route_rebuttal(state)
+
+    g.set_conditional_entry_point(route_entry)
+
+    # Round 1 审稿人 → synthesizer
+    for name in _REVIEWER_NAMES:
+        g.add_edge(name, "synthesizer")
+
+    # rebuttal 审稿人 → synthesizer
+    for name in _REVIEWER_NAMES:
+        g.add_edge(f"rebuttal_{name}", "synthesizer")
+
+    # synthesizer → END
+    g.add_edge("synthesizer", END)
+
+    cp = get_checkpointer(db_path) if db_path else get_checkpointer()
+    return g.compile(checkpointer=cp)
