@@ -5,13 +5,23 @@
 {% if locked %}
 <p>已用完 2 轮 Rebuttal 机会。</p>
 {% else %}
+{% set role_to_target = {
+  "EIC": "eic",
+  "Methodology": "methodology",
+  "Domain": "domain",
+  "Perspective": "perspective",
+  "Devil": "devils_advocate",
+  "DevilsAdvocate": "devils_advocate",
+  "Devil's Advocate": "devils_advocate"
+} %}
 <form action="/rebuttal/{{ thread_id }}" method="post">
   <label>
     选择回应对象
   <select name="target">
     <option value="all">全部审稿人</option>
     {% for cfg in reviewers %}
-    <option value="{{ cfg.role }}">{{ cfg.role }} —— {{ cfg.identity }}</option>
+    {% set target = role_to_target.get(cfg.role, cfg.role | lower) %}
+    <option value="{{ target }}">{{ cfg.role }} —— {{ cfg.identity }}</option>
     {% endfor %}
     {% if not reviewers %}
     <option value="eic">EIC</option>

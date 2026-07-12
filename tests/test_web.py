@@ -133,8 +133,12 @@ class TestTemplates:
         assert "text/event-stream" in r.headers.get("content-type", "")
 
     def test_progress_template_contains_htmx_sse(self):
+        base = Path("paper_reviewer/templates/base.html").read_text(encoding="utf-8")
         tpl = Path("paper_reviewer/templates/progress.html").read_text(encoding="utf-8")
+        assert "htmx" in base
+        assert "sse" in base
         assert 'hx-sse="connect:/progress/{{ thread_id }}"' in tpl
+        assert "innerHTML" not in tpl
 
     def test_result_template_shows_reports_and_decision(self):
         tpl = Path("paper_reviewer/templates/result.html").read_text(encoding="utf-8")
@@ -146,4 +150,5 @@ class TestTemplates:
         tpl = Path("paper_reviewer/templates/rebuttal_form.html").read_text(encoding="utf-8")
         assert 'name="target"' in tpl
         assert 'name="text"' in tpl
+        assert "role_to_target" in tpl
         assert "已用完" in tpl or "已达" in tpl
