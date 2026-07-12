@@ -62,6 +62,10 @@ def review_paper(paper_text: str, title: str = "", use_rag: bool = True,
         consensus_analysis=None,
         dimension_scores=None,
         revision_roadmap=None,
+        round_number=1,
+        rebuttal_text=None,
+        rebuttal_target=None,
+        rebuttal_history=[],
     )
 
     # stream 返回每个节点的输出；累积所有 chunk 得到完整结果

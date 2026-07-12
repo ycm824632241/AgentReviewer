@@ -56,3 +56,8 @@ class ReviewState(TypedDict):
     consensus_analysis: Optional[dict]
     dimension_scores: Optional[dict]
     revision_roadmap: Optional[dict]
+    # ── Rebuttal 环节新增字段 ──
+    round_number: int                   # 当前轮次，1-based
+    rebuttal_text: Optional[str]        # 作者申诉正文
+    rebuttal_target: Optional[str]     # "eic"/"methodology"/"domain"/"perspective"/"devils_advocate"/"all"/None
+    rebuttal_history: List[dict]        # [{round, target, text, persuasion, adjustment}]
