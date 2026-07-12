@@ -197,8 +197,6 @@ async def submit_rebuttal(
     text: str = Form(...),
 ):
     """提交 rebuttal：用同一个 thread_id 继续图，LangGraph 从断点恢复一审状态。"""
-    from paper_reviewer.graph import build_rebuttal_graph
-
     if target not in VALID_REBUTTAL_TARGETS:
         raise HTTPException(status_code=400, detail="invalid target")
 
@@ -206,11 +204,17 @@ async def submit_rebuttal(
     if saved.get("round_number", 1) >= 2:
         raise HTTPException(status_code=400, detail="round limit reached")
 
+    st = _task_status.setdefault(thread_id, {"done": [], "current": ""})
+    if st.get("round") == 2 and not st.get("finished") and not st.get("error"):
+        raise HTTPException(status_code=409, detail="rebuttal already running")
+
+    next_round = saved.get("round_number", 1) + 1
+    st.update({"done": [], "current": "", "finished": False, "error": None, "round": next_round})
+
+    from paper_reviewer.graph import build_rebuttal_graph
+
     graph_app = build_rebuttal_graph()
     config = {"configurable": {"thread_id": thread_id}}
-    next_round = saved.get("round_number", 1) + 1
-    st = _task_status.setdefault(thread_id, {"done": [], "current": ""})
-    st.update({"done": [], "current": "", "finished": False, "error": None, "round": next_round})
 
     def _run():
         inp = {

@@ -112,3 +112,13 @@ class TestResultAndRebuttal:
 
         assert r.status_code == 400
         assert "invalid target" in r.text
+
+    def test_submit_rebuttal_rejects_in_progress_round2(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 1}, raising=False)
+        tid = "already-running"
+        web._task_status[tid] = {"round": 2, "finished": False, "error": None}
+
+        r = client.post(f"/rebuttal/{tid}", data={"target": "eic", "text": "重复提交"})
+
+        assert r.status_code == 409
+        assert "already running" in r.text
