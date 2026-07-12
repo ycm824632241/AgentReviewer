@@ -137,7 +137,10 @@ class TestTemplates:
         tpl = Path("paper_reviewer/templates/progress.html").read_text(encoding="utf-8")
         assert "htmx" in base
         assert "sse" in base
-        assert 'hx-sse="connect:/progress/{{ thread_id }}"' in tpl
+        assert 'hx-ext="sse"' in tpl
+        assert 'sse-connect="/progress/{{ thread_id }}"' in tpl
+        assert "sse-swap" in tpl
+        assert "hx-sse" not in tpl
         assert "innerHTML" not in tpl
 
     def test_result_template_shows_reports_and_decision(self):

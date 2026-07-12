@@ -2,8 +2,8 @@
 {% block content %}
 <h1>审稿进度</h1>
 <p>Thread: {{ thread_id }}</p>
-<div hx-sse="connect:/progress/{{ thread_id }}">
-  <ul id="progress-list" hx-sse="swap:done">
+<div hx-ext="sse" sse-connect="/progress/{{ thread_id }}">
+  <ul id="progress-list" sse-swap="message">
     <li>等待开始...</li>
   </ul>
 </div>
