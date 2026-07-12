@@ -49,6 +49,26 @@ class TestResultAndRebuttal:
         assert r.status_code == 200
         assert tid in r.text
 
+    def test_result_page_shows_scores_and_hides_rebuttal_after_round2(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {
+                "round_number": 2,
+                "editorial_decision": "Minor Revision",
+                "dimension_scores": {"originality": 70, "weighted_total": 72.1},
+            },
+            raising=False,
+        )
+
+        r = client.get("/result/locked-thread")
+
+        assert r.status_code == 200
+        assert "Minor Revision" in r.text
+        assert "originality" in r.text
+        assert "72.1" in r.text
+        assert "/rebuttal/locked-thread" not in r.text
+
     def test_rebuttal_form_returns_200(self, monkeypatch):
         tid = self._upload_without_review(monkeypatch)
         r = client.get(f"/rebuttal/{tid}")
@@ -76,3 +96,19 @@ class TestResultAndRebuttal:
         assert body == {"status": "rebuttal_started", "round": 2, "thread_id": tid}
         assert web._task_status[tid]["round"] == 2
         assert web._task_status[tid]["finished"] is False
+
+    def test_submit_rebuttal_rejects_round3(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 2}, raising=False)
+
+        r = client.post("/rebuttal/already-round2", data={"target": "eic", "text": "再次回应"})
+
+        assert r.status_code == 400
+        assert "round limit" in r.text
+
+    def test_submit_rebuttal_rejects_unknown_target(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 1}, raising=False)
+
+        r = client.post("/rebuttal/tid", data={"target": "unknown", "text": "作者回应"})
+
+        assert r.status_code == 400
+        assert "invalid target" in r.text

@@ -7,6 +7,16 @@
 {% endif %}
 {% if state %}
 <p>决定：{{ state.editorial_decision or "处理中" }}</p>
+{% if state.dimension_scores %}
+<dl>
+  {% for name, score in state.dimension_scores.items() %}
+  <dt>{{ name }}</dt>
+  <dd>{{ score }}</dd>
+  {% endfor %}
+</dl>
 {% endif %}
+{% endif %}
+{% if not locked %}
 <a href="/rebuttal/{{ thread_id }}">提交 Rebuttal</a>
+{% endif %}
 {% endblock %}

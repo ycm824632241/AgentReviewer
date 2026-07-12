@@ -5,7 +5,7 @@ import json
 import os
 import uuid
 
-from fastapi import BackgroundTasks, FastAPI, Form, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -19,6 +19,7 @@ app = FastAPI(title="AI 论文审稿系统")
 # ── 全局状态（demo 级，进程内） ──
 _paper_store: dict[str, str] = {}      # thread_id → 论文原文
 _task_status: dict[str, dict] = {}     # thread_id → {"done": [...], "current": "", "finished": bool, "error": str}
+VALID_REBUTTAL_TARGETS = {"eic", "methodology", "domain", "perspective", "devils_advocate", "all"}
 
 
 # ── 节点中文名（用于前端展示） ──
@@ -158,6 +159,7 @@ async def history(request: Request):
 async def result(request: Request, thread_id: str):
     st = _task_status.get(thread_id, {})
     saved = get_thread_state(thread_id)
+    round_number = saved.get("round_number", 1) if saved else 1
     return templates.TemplateResponse(
         request,
         "result.html",
@@ -165,6 +167,7 @@ async def result(request: Request, thread_id: str):
             "thread_id": thread_id,
             "state": saved,
             "progress": st,
+            "locked": round_number >= 2,
         },
     )
 
@@ -196,9 +199,15 @@ async def submit_rebuttal(
     """提交 rebuttal：用同一个 thread_id 继续图，LangGraph 从断点恢复一审状态。"""
     from paper_reviewer.graph import build_rebuttal_graph
 
+    if target not in VALID_REBUTTAL_TARGETS:
+        raise HTTPException(status_code=400, detail="invalid target")
+
+    saved = get_thread_state(thread_id) or {}
+    if saved.get("round_number", 1) >= 2:
+        raise HTTPException(status_code=400, detail="round limit reached")
+
     graph_app = build_rebuttal_graph()
     config = {"configurable": {"thread_id": thread_id}}
-    saved = get_thread_state(thread_id) or {}
     next_round = saved.get("round_number", 1) + 1
     st = _task_status.setdefault(thread_id, {"done": [], "current": ""})
     st.update({"done": [], "current": "", "finished": False, "error": None, "round": next_round})
