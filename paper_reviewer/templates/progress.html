@@ -3,7 +3,7 @@
 <h1>审稿进度</h1>
 <p>Thread: {{ thread_id }}</p>
 <div hx-ext="sse" sse-connect="/progress/{{ thread_id }}">
-  <ul id="progress-list" sse-swap="message">
+  <ul id="progress-list">
     <li>等待开始...</li>
   </ul>
 </div>
