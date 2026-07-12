@@ -5,11 +5,11 @@ import json
 import os
 import uuid
 
-from fastapi import BackgroundTasks, FastAPI, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
-from paper_reviewer.checkpoint import list_threads
+from paper_reviewer.checkpoint import get_thread_state, list_threads
 
 BASE_DIR = os.path.dirname(__file__)
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
@@ -29,6 +29,11 @@ NODE_LABELS = {
     "domain": "领域专家审稿",
     "perspective": "跨学科审稿",
     "devils_advocate": "魔鬼代言人挑战",
+    "rebuttal_eic": "EIC 二审",
+    "rebuttal_methodology": "方法论二审",
+    "rebuttal_domain": "领域专家二审",
+    "rebuttal_perspective": "跨学科二审",
+    "rebuttal_devils_advocate": "魔鬼代言人二审",
     "synthesizer": "编辑综合",
 }
 
@@ -147,3 +152,71 @@ async def index(request: Request):
 async def history(request: Request):
     threads = list_threads()
     return templates.TemplateResponse(request, "history.html", context={"threads": threads})
+
+
+@app.get("/result/{thread_id}", response_class=HTMLResponse)
+async def result(request: Request, thread_id: str):
+    st = _task_status.get(thread_id, {})
+    saved = get_thread_state(thread_id)
+    return templates.TemplateResponse(
+        request,
+        "result.html",
+        context={
+            "thread_id": thread_id,
+            "state": saved,
+            "progress": st,
+        },
+    )
+
+
+@app.get("/rebuttal/{thread_id}", response_class=HTMLResponse)
+async def rebuttal_form(request: Request, thread_id: str):
+    saved = get_thread_state(thread_id)
+    reviewers = saved.get("reviewer_configs", []) if saved else []
+    round_number = saved.get("round_number", 1) if saved else 1
+    return templates.TemplateResponse(
+        request,
+        "rebuttal_form.html",
+        context={
+            "thread_id": thread_id,
+            "reviewers": reviewers,
+            "round_number": round_number,
+            "locked": round_number >= 2,
+        },
+    )
+
+
+@app.post("/rebuttal/{thread_id}")
+async def submit_rebuttal(
+    thread_id: str,
+    background_tasks: BackgroundTasks,
+    target: str = Form(...),
+    text: str = Form(...),
+):
+    """提交 rebuttal：用同一个 thread_id 继续图，LangGraph 从断点恢复一审状态。"""
+    from paper_reviewer.graph import build_rebuttal_graph
+
+    graph_app = build_rebuttal_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    saved = get_thread_state(thread_id) or {}
+    next_round = saved.get("round_number", 1) + 1
+    st = _task_status.setdefault(thread_id, {"done": [], "current": ""})
+    st.update({"done": [], "current": "", "finished": False, "error": None, "round": next_round})
+
+    def _run():
+        inp = {
+            "rebuttal_text": text,
+            "rebuttal_target": target,
+            "round_number": next_round,
+        }
+        try:
+            for chunk in graph_app.stream(inp, config=config):
+                for node_name in chunk:
+                    _on_node_complete(thread_id, node_name)
+            _task_status.setdefault(thread_id, {})["finished"] = True
+            _task_status[thread_id]["round"] = next_round
+        except Exception as e:
+            _task_status.setdefault(thread_id, {})["error"] = repr(e)
+
+    background_tasks.add_task(_run)
+    return {"status": "rebuttal_started", "round": next_round, "thread_id": thread_id}

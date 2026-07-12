@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>提交 Rebuttal</h1>
+<p>Thread: {{ thread_id }}</p>
+{% if locked %}
+<p>已达 Rebuttal 轮次上限</p>
+{% else %}
+<form action="/rebuttal/{{ thread_id }}" method="post">
+  <select name="target">
+    <option value="all">全部审稿人</option>
+    <option value="eic">EIC</option>
+    <option value="methodology">方法论</option>
+    <option value="domain">领域专家</option>
+    <option value="perspective">跨学科视角</option>
+    <option value="devils_advocate">魔鬼代言人</option>
+  </select>
+  <textarea name="text"></textarea>
+  <button type="submit">提交</button>
+</form>
+{% endif %}
+{% endblock %}

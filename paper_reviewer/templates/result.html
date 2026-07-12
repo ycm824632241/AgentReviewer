@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>审稿结果</h1>
+<p>Thread: {{ thread_id }}</p>
+{% if progress and not progress.finished %}
+<p>正在处理</p>
+{% endif %}
+{% if state %}
+<p>决定：{{ state.editorial_decision or "处理中" }}</p>
+{% endif %}
+<a href="/rebuttal/{{ thread_id }}">提交 Rebuttal</a>
+{% endblock %}
