@@ -1,5 +1,6 @@
 # tests/test_web.py
 import pytest
+from pathlib import Path
 from fastapi.testclient import TestClient
 import paper_reviewer.web as web
 from paper_reviewer.web import app
@@ -122,3 +123,27 @@ class TestResultAndRebuttal:
 
         assert r.status_code == 409
         assert "already running" in r.text
+
+
+class TestTemplates:
+    def test_progress_endpoint_is_sse(self):
+        web._task_status["dummy-tid"] = {"done": [], "finished": True}
+        r = client.get("/progress/dummy-tid")
+        assert r.status_code == 200
+        assert "text/event-stream" in r.headers.get("content-type", "")
+
+    def test_progress_template_contains_htmx_sse(self):
+        tpl = Path("paper_reviewer/templates/progress.html").read_text(encoding="utf-8")
+        assert 'hx-sse="connect:/progress/{{ thread_id }}"' in tpl
+
+    def test_result_template_shows_reports_and_decision(self):
+        tpl = Path("paper_reviewer/templates/result.html").read_text(encoding="utf-8")
+        assert "编辑决定" in tpl
+        assert "eic_report" in tpl
+        assert "revision_roadmap" in tpl
+
+    def test_rebuttal_template_has_target_selector_and_limit_copy(self):
+        tpl = Path("paper_reviewer/templates/rebuttal_form.html").read_text(encoding="utf-8")
+        assert 'name="target"' in tpl
+        assert 'name="text"' in tpl
+        assert "已用完" in tpl or "已达" in tpl

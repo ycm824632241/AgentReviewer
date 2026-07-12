@@ -1,8 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>AI 论文审稿系统</h1>
+<p>上传 .txt 或 .pdf，系统会启动多审稿人流程并保存断点。</p>
 <form action="/upload" method="post" enctype="multipart/form-data">
-  <input type="file" name="file" accept=".txt,.pdf">
-  <button type="submit">上传论文</button>
+  <label>
+    论文文件
+    <input type="file" name="file" accept=".txt,.pdf" required>
+  </label>
+  <button type="submit">上传并开始审稿</button>
 </form>
+<p><a href="/history">查看历史</a></p>
 {% endblock %}

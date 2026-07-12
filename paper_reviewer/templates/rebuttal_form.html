@@ -1,21 +1,33 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>提交 Rebuttal</h1>
+<h1>Rebuttal —— 第 {{ round_number }} 轮</h1>
 <p>Thread: {{ thread_id }}</p>
 {% if locked %}
-<p>已达 Rebuttal 轮次上限</p>
+<p>已用完 2 轮 Rebuttal 机会。</p>
 {% else %}
 <form action="/rebuttal/{{ thread_id }}" method="post">
+  <label>
+    选择回应对象
   <select name="target">
     <option value="all">全部审稿人</option>
+    {% for cfg in reviewers %}
+    <option value="{{ cfg.role }}">{{ cfg.role }} —— {{ cfg.identity }}</option>
+    {% endfor %}
+    {% if not reviewers %}
     <option value="eic">EIC</option>
-    <option value="methodology">方法论</option>
-    <option value="domain">领域专家</option>
-    <option value="perspective">跨学科视角</option>
-    <option value="devils_advocate">魔鬼代言人</option>
+    <option value="methodology">Methodology</option>
+    <option value="domain">Domain</option>
+    <option value="perspective">Perspective</option>
+    <option value="devils_advocate">Devils Advocate</option>
+    {% endif %}
   </select>
-  <textarea name="text"></textarea>
+  </label>
+  <label>
+    逐点回应
+    <textarea name="text" rows="12" cols="80" placeholder="关于审稿人意见1：&#10;我们的实验设计已如正文 p.5 所述……" required></textarea>
+  </label>
   <button type="submit">提交</button>
 </form>
 {% endif %}
+<p><a href="/result/{{ thread_id }}">返回结果</a></p>
 {% endblock %}
