@@ -19,6 +19,20 @@
 - `py -3.11 -m pytest tests/test_web.py tests/test_checkpoint.py tests/test_rebuttal.py -v` -> `43 passed, 1 warning` (existing Starlette/httpx deprecation warning).
 - `git diff --check` -> passed; no whitespace errors.
 
+## Round-Two Checkpoint Completion Fix
+
+### Changes
+
+- Added `synthesized_round` to `ReviewState` and set it when the synthesizer produces its final outputs.
+- Made checkpoint completion round-aware: legacy Round 1 checkpoints without a marker remain complete, while Round 2 requires a matching `synthesized_round` marker.
+- Added API result and SSE regressions for legacy Round 1, interrupted Round 2, and completed Round 2 checkpoints.
+
+### Commands And Results
+
+- `py -3.11 -m pytest tests/test_web.py -v -k "legacy_completed_round_one or does_not_complete_interrupted_round_two or interrupted_round_two_checkpoint_emits_inactive_error or completed_round_two_checkpoint_emits_finished"` -> `4 passed, 36 deselected, 1 warning` (existing Starlette/httpx deprecation warning).
+- `py -3.11 -m pytest tests/test_web.py tests/test_checkpoint.py tests/test_rebuttal.py -v` -> `50 passed, 1 warning` (existing Starlette/httpx deprecation warning).
+- `git diff --check` -> passed; Git emitted only existing LF-to-CRLF conversion warnings and no whitespace errors.
+
 ## Final Re-Review Fixes
 
 ### Changes

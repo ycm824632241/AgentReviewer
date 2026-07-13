@@ -290,6 +290,36 @@ class TestApiEndpoints:
         assert r.status_code == 200
         assert r.json()["progress"] == {"done": ["synthesizer"], "finished": True}
 
+    def test_api_result_keeps_legacy_completed_round_one_checkpoint_finished(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"round_number": 1, "editorial_decision": "Accept"},
+            raising=False,
+        )
+
+        r = client.get("/api/result/legacy-round-one")
+
+        assert r.status_code == 200
+        assert r.json()["progress"] == {"done": ["synthesizer"], "finished": True}
+
+    def test_api_result_does_not_complete_interrupted_round_two_checkpoint(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {
+                "round_number": 2,
+                "editorial_decision": "Accept",
+                "dimension_scores": {"weighted_total": 80},
+            },
+            raising=False,
+        )
+
+        r = client.get("/api/result/interrupted-round-two")
+
+        assert r.status_code == 200
+        assert r.json()["progress"] == {}
+
     def test_api_result_rejects_unknown_thread(self, monkeypatch):
         monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
 
@@ -411,6 +441,48 @@ class TestApiEndpoints:
         )
 
         response = asyncio.run(web.api_progress("checkpoint-completed-progress"))
+        event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
+
+        assert json.loads(event.removeprefix("data: ").strip()) == {
+            "node": "__all__",
+            "status": "finished",
+        }
+
+    def test_api_progress_interrupted_round_two_checkpoint_emits_inactive_error(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {
+                "round_number": 2,
+                "editorial_decision": "Accept",
+                "dimension_scores": {"weighted_total": 80},
+                "synthesized_round": 1,
+            },
+            raising=False,
+        )
+
+        response = asyncio.run(web.api_progress("interrupted-round-two-progress"))
+        event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
+
+        assert json.loads(event.removeprefix("data: ").strip()) == {
+            "node": "__error__",
+            "status": "thread is not active",
+        }
+
+    def test_api_progress_completed_round_two_checkpoint_emits_finished(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {
+                "round_number": 2,
+                "editorial_decision": "Accept",
+                "dimension_scores": {"weighted_total": 80},
+                "synthesized_round": 2,
+            },
+            raising=False,
+        )
+
+        response = asyncio.run(web.api_progress("completed-round-two-progress"))
         event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
 
         assert json.loads(event.removeprefix("data: ").strip()) == {

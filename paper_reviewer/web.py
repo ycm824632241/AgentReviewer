@@ -108,6 +108,7 @@ def _run_review(thread_id: str, paper_text: str, title: str) -> None:
             consensus_analysis=None,
             dimension_scores=None,
             revision_roadmap=None,
+            synthesized_round=None,
             round_number=1,
             rebuttal_text=None,
             rebuttal_target=None,
@@ -166,11 +167,18 @@ def _result_payload(thread_id: str, saved: dict | None) -> dict:
 
 
 def _is_completed_review(saved: dict | None) -> bool:
-    """Return whether a checkpoint has final synthesizer output to render."""
-    return bool(saved) and any(
+    """Return whether a checkpoint has synthesis for its current review round."""
+    if not saved or not any(
         saved.get(key)
         for key in ("editorial_decision", "dimension_scores", "revision_roadmap", "consensus_analysis")
-    )
+    ):
+        return False
+
+    round_number = saved.get("round_number", 1)
+    synthesized_round = saved.get("synthesized_round")
+    if round_number <= 1:
+        return synthesized_round is None or synthesized_round == 1
+    return synthesized_round == round_number
 
 
 def _rebuttal_reviewers(reviewer_configs: list[dict]) -> list[dict]:

@@ -189,4 +189,5 @@ EIC 报告: {eic}
         },
         "revision_roadmap": roadmap_result.get("revision_roadmap", {}),
         "dimension_scores": decision_result.get("final_scores", {}),
+        "synthesized_round": state.get("round_number", 1),
     }
