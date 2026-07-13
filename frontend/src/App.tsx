@@ -88,6 +88,25 @@ function TextList({ value }: { value: unknown }) {
   );
 }
 
+function cleanIssueText(value: unknown): string {
+  return renderValue(value).replace(/（?预计[:：]?\s*[^）)]*[天日周月][）)]?/g, "").trim();
+}
+
+function renderFinalIssue(item: unknown): string {
+  if (!isRecord(item)) return cleanIssueText(item);
+
+  const issue = getField(item, ["issue", "item", "title", "description", "problem"]);
+  const why = getField(item, ["why_it_matters"]);
+  const direction = getField(item, ["revision_direction", "suggestion"]);
+  const parts = [
+    issue ? cleanIssueText(issue) : "",
+    why ? `影响：${cleanIssueText(why)}` : "",
+    direction ? `修改方向：${cleanIssueText(direction)}` : ""
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join("。") : cleanIssueText(item);
+}
+
 function FinalIssueSummary({ roadmap }: { roadmap: unknown }) {
   if (!isRecord(roadmap)) return <p className="muted">暂无编辑综合修改问题。</p>;
 
@@ -100,7 +119,11 @@ function FinalIssueSummary({ roadmap }: { roadmap: unknown }) {
   return (
     <section className="final-issues">
       <h3>编辑综合修改问题</h3>
-      <TextList value={issues} />
+      <ul className="text-list">
+        {asList(issues).map((item, index) => (
+          <li key={index}>{renderFinalIssue(item)}</li>
+        ))}
+      </ul>
     </section>
   );
 }

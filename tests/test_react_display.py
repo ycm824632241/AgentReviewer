@@ -53,6 +53,10 @@ def test_editor_decision_shows_integrated_revision_issues():
     app = read_frontend("App.tsx")
 
     assert "function FinalIssueSummary" in app
+    assert "function renderFinalIssue" in app
     assert "编辑综合修改问题" in app
     assert "revision_roadmap" in app
+    assert "why_it_matters" in app
+    assert "revision_direction" in app
+    assert "effort" not in app
     assert "给作者的问题" not in app
