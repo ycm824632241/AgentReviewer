@@ -6,15 +6,22 @@ import os
 import uuid
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from paper_reviewer.checkpoint import get_thread_state, list_threads
 
 BASE_DIR = os.path.dirname(__file__)
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
+FRONTEND_DIST = os.path.join(PROJECT_ROOT, "frontend", "dist")
+FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 app = FastAPI(title="AI 论文审稿系统")
+
+if os.path.isdir(os.path.join(FRONTEND_DIST, "assets")):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
 
 # ── 全局状态（demo 级，进程内） ──
 _paper_store: dict[str, str] = {}      # thread_id → 论文原文
@@ -348,3 +355,12 @@ async def submit_rebuttal(
     if _wants_html(request):
         return RedirectResponse(f"/reviews/{thread_id}/progress", status_code=303)
     return body
+
+
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def spa_fallback(full_path: str):
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="not found")
+    if os.path.exists(FRONTEND_INDEX):
+        return FileResponse(FRONTEND_INDEX)
+    raise HTTPException(status_code=404, detail="not found")

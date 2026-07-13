@@ -330,3 +330,19 @@ class TestApiEndpoints:
 
         assert r.status_code == 200
         assert "text/event-stream" in r.headers.get("content-type", "")
+
+
+class TestReactStaticHosting:
+    def test_api_routes_are_not_spa_fallback(self):
+        r = client.get("/api/result/static-missing")
+
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/json")
+        assert r.json()["thread_id"] == "static-missing"
+
+    def test_unknown_route_without_dist_returns_404(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web, "FRONTEND_INDEX", str(tmp_path / "missing-index.html"), raising=False)
+
+        r = client.get("/react-only-route")
+
+        assert r.status_code == 404
