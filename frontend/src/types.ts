@@ -49,6 +49,11 @@ export type RebuttalInfoResponse = {
   locked: boolean;
 };
 
+export type HistoryItem = {
+  thread_id: string;
+  title?: string;
+};
+
 export type HistoryResponse = {
-  threads: Array<{ thread_id: string }>;
+  threads: HistoryItem[];
 };

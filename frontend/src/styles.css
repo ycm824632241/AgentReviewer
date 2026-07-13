@@ -182,6 +182,76 @@ h3 {
   min-width: 0;
 }
 
+.report-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recommendation-chip {
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: #713f12;
+  background: #fef3c7;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.report-meta {
+  margin-top: 10px;
+  color: #52697c;
+  font-size: 13px;
+}
+
+.report-section {
+  margin-top: 16px;
+  border-top: 1px solid #e6edf4;
+  padding-top: 14px;
+}
+
+.report-section h4 {
+  margin: 0 0 10px;
+  color: #22394d;
+  font-size: 14px;
+}
+
+.score-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.score-grid div {
+  border: 1px solid #e0e8ef;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fbfd;
+}
+
+.score-grid dt {
+  color: #6b7c8a;
+  font-size: 12px;
+}
+
+.score-grid dd {
+  margin: 4px 0 0;
+  color: #183247;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.text-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+  color: #344452;
+  line-height: 1.55;
+}
+
 .side-column .panel {
   display: grid;
   gap: 12px;
@@ -193,11 +263,23 @@ h3 {
 }
 
 .history-list button {
+  display: grid;
+  gap: 4px;
   width: 100%;
   color: #24445c;
   background: #edf3f8;
   text-align: left;
   overflow-wrap: anywhere;
+}
+
+.history-title {
+  color: #183247;
+  font-weight: 700;
+}
+
+.history-list small {
+  color: #6b7c8a;
+  font-size: 12px;
 }
 
 @media (max-width: 920px) {
