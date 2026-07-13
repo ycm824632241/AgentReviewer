@@ -238,3 +238,95 @@ class TestTemplates:
         assert 'name="text"' in tpl
         assert "role_to_target" in tpl
         assert "已用完" in tpl or "已达" in tpl
+
+
+class TestApiEndpoints:
+    PAPER_TXT = TestUploadAndProgress.PAPER_TXT
+
+    def test_api_upload_txt_returns_thread_id(self, monkeypatch):
+        monkeypatch.setattr(web, "_run_review", lambda *_args, **_kwargs: None)
+
+        r = client.post(
+            "/api/upload",
+            files={"file": ("api.txt", self.PAPER_TXT.encode("utf-8"), "text/plain")},
+        )
+
+        assert r.status_code == 200
+        assert set(r.json()) == {"thread_id"}
+        assert len(r.json()["thread_id"]) == 36
+
+    def test_api_result_returns_json_payload(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"round_number": 2, "editorial_decision": "Accept"},
+            raising=False,
+        )
+        web._task_status["api-result"] = {"done": ["synthesizer"], "finished": True}
+
+        r = client.get("/api/result/api-result")
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "thread_id": "api-result",
+            "state": {"round_number": 2, "editorial_decision": "Accept"},
+            "progress": {"done": ["synthesizer"], "finished": True},
+            "locked": True,
+        }
+
+    def test_api_rebuttal_info_rejects_missing_thread(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        r = client.get("/api/rebuttal/missing")
+
+        assert r.status_code == 404
+        assert r.json()["detail"] == "thread not found"
+
+    def test_api_rebuttal_info_returns_reviewers(self, monkeypatch):
+        saved = {
+            "round_number": 1,
+            "reviewer_configs": [{"role": "methodology", "name": "方法论专家"}],
+        }
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: saved, raising=False)
+
+        r = client.get("/api/rebuttal/api-thread")
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "thread_id": "api-thread",
+            "reviewers": [{"role": "methodology", "name": "方法论专家"}],
+            "round_number": 1,
+            "locked": False,
+        }
+
+    def test_api_submit_rebuttal_starts_round2(self, monkeypatch):
+        class FakeGraph:
+            def stream(self, _inp, _config):
+                yield {"rebuttal_eic": {}}
+
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 1}, raising=False)
+
+        import paper_reviewer.graph as graph
+
+        monkeypatch.setattr(graph, "build_rebuttal_graph", lambda: FakeGraph())
+
+        r = client.post("/api/rebuttal/api-thread", data={"target": "eic", "text": "作者回应"})
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "rebuttal_started", "round": 2, "thread_id": "api-thread"}
+
+    def test_api_history_returns_threads(self, monkeypatch):
+        monkeypatch.setattr(web, "list_threads", lambda: [{"thread_id": "a"}, {"thread_id": "b"}], raising=False)
+
+        r = client.get("/api/history")
+
+        assert r.status_code == 200
+        assert r.json() == {"threads": [{"thread_id": "a"}, {"thread_id": "b"}]}
+
+    def test_api_progress_endpoint_is_sse(self):
+        web._task_status["api-progress"] = {"done": [], "finished": True}
+
+        r = client.get("/api/progress/api-progress")
+
+        assert r.status_code == 200
+        assert "text/event-stream" in r.headers.get("content-type", "")

@@ -133,6 +133,18 @@ def _decode_pdf(raw: bytes) -> str:
         return ""
 
 
+def _result_payload(thread_id: str) -> dict:
+    st = _task_status.get(thread_id, {})
+    saved = get_thread_state(thread_id)
+    round_number = saved.get("round_number", 1) if saved else 1
+    return {
+        "thread_id": thread_id,
+        "state": saved,
+        "progress": st,
+        "locked": round_number >= 2,
+    }
+
+
 @app.get("/progress/{thread_id}")
 async def progress(thread_id: str):
     """SSE 流：实时推送所有已完成的节点 + 最终 finished/error 事件。"""
@@ -159,6 +171,60 @@ async def progress(thread_id: str):
                 break
             await asyncio.sleep(0.5)
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/api/upload")
+async def api_upload(file: UploadFile, background_tasks: BackgroundTasks):
+    raw = await file.read()
+    text = raw.decode("utf-8") if file.filename.endswith(".txt") else _decode_pdf(raw)
+    thread_id = str(uuid.uuid4())
+    _paper_store[thread_id] = text
+    background_tasks.add_task(_run_review, thread_id, text, file.filename)
+    return {"thread_id": thread_id}
+
+
+@app.get("/api/progress/{thread_id}")
+async def api_progress(thread_id: str):
+    return await progress(thread_id)
+
+
+@app.get("/api/result/{thread_id}")
+async def api_result(thread_id: str):
+    return _result_payload(thread_id)
+
+
+@app.get("/api/rebuttal/{thread_id}")
+async def api_rebuttal_info(thread_id: str):
+    saved = get_thread_state(thread_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="thread not found")
+    round_number = saved.get("round_number", 1)
+    return {
+        "thread_id": thread_id,
+        "reviewers": saved.get("reviewer_configs", []),
+        "round_number": round_number,
+        "locked": round_number >= 2,
+    }
+
+
+@app.post("/api/rebuttal/{thread_id}")
+async def api_submit_rebuttal(
+    thread_id: str,
+    background_tasks: BackgroundTasks,
+    target: str = Form(...),
+    text: str = Form(...),
+):
+    return await _submit_rebuttal_impl(
+        thread_id=thread_id,
+        background_tasks=background_tasks,
+        target=target,
+        text=text,
+    )
+
+
+@app.get("/api/history")
+async def api_history():
+    return {"threads": list_threads()}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -217,15 +283,12 @@ async def rebuttal_form(request: Request, thread_id: str):
     )
 
 
-@app.post("/rebuttal/{thread_id}")
-async def submit_rebuttal(
-    request: Request,
+async def _submit_rebuttal_impl(
     thread_id: str,
     background_tasks: BackgroundTasks,
-    target: str = Form(...),
-    text: str = Form(...),
-):
-    """提交 rebuttal：用同一个 thread_id 继续图，LangGraph 从断点恢复一审状态。"""
+    target: str,
+    text: str,
+) -> dict:
     if target not in VALID_REBUTTAL_TARGETS:
         raise HTTPException(status_code=400, detail="invalid target")
 
@@ -265,6 +328,23 @@ async def submit_rebuttal(
             _release_graph_checkpointer(graph_app)
 
     background_tasks.add_task(_run)
+    return {"status": "rebuttal_started", "round": next_round, "thread_id": thread_id}
+
+
+@app.post("/rebuttal/{thread_id}")
+async def submit_rebuttal(
+    request: Request,
+    thread_id: str,
+    background_tasks: BackgroundTasks,
+    target: str = Form(...),
+    text: str = Form(...),
+):
+    body = await _submit_rebuttal_impl(
+        thread_id=thread_id,
+        background_tasks=background_tasks,
+        target=target,
+        text=text,
+    )
     if _wants_html(request):
         return RedirectResponse(f"/reviews/{thread_id}/progress", status_code=303)
-    return {"status": "rebuttal_started", "round": next_round, "thread_id": thread_id}
+    return body
