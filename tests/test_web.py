@@ -107,10 +107,23 @@ class TestResultAndRebuttal:
         assert "/rebuttal/locked-thread" not in r.text
 
     def test_rebuttal_form_returns_200(self, monkeypatch):
-        tid = self._upload_without_review(monkeypatch)
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"round_number": 1, "reviewer_configs": []},
+            raising=False,
+        )
+        tid = "known-thread"
         r = client.get(f"/rebuttal/{tid}")
         assert r.status_code == 200
         assert tid in r.text
+
+    def test_rebuttal_form_rejects_unknown_thread(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        r = client.get("/rebuttal/missing")
+
+        assert r.status_code == 404
 
     def test_submit_rebuttal_starts_round2(self, monkeypatch):
         class FakeGraph:

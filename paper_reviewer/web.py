@@ -201,8 +201,10 @@ async def result(request: Request, thread_id: str):
 @app.get("/rebuttal/{thread_id}", response_class=HTMLResponse)
 async def rebuttal_form(request: Request, thread_id: str):
     saved = get_thread_state(thread_id)
-    reviewers = saved.get("reviewer_configs", []) if saved else []
-    round_number = saved.get("round_number", 1) if saved else 1
+    if saved is None:
+        raise HTTPException(status_code=404, detail="thread not found")
+    reviewers = saved.get("reviewer_configs", [])
+    round_number = saved.get("round_number", 1)
     return templates.TemplateResponse(
         request,
         "rebuttal_form.html",

@@ -1,6 +1,8 @@
 # tests/test_checkpoint.py
 import tempfile, os
 import pytest
+from types import SimpleNamespace
+import paper_reviewer.checkpoint as checkpoint
 from paper_reviewer.checkpoint import get_checkpointer, get_thread_state, list_threads
 from paper_reviewer.state import ReviewState
 
@@ -43,3 +45,24 @@ class TestCheckpointer:
         with tempfile.TemporaryDirectory() as tmp:
             db = os.path.join(tmp, "test.db")
             assert list_threads(db) == []
+
+    def test_list_threads_deduplicates_checkpoint_history(self, monkeypatch):
+        class FakeCheckpointer:
+            def __init__(self):
+                self.released = False
+
+            def list(self, _config):
+                return [
+                    SimpleNamespace(config={"configurable": {"thread_id": "t1"}}),
+                    SimpleNamespace(config={"configurable": {"thread_id": "t2"}}),
+                    SimpleNamespace(config={"configurable": {"thread_id": "t1"}}),
+                ]
+
+            def release(self):
+                self.released = True
+
+        fake = FakeCheckpointer()
+        monkeypatch.setattr(checkpoint, "get_checkpointer", lambda _db_path: fake)
+
+        assert list_threads("ignored.db") == [{"thread_id": "t1"}, {"thread_id": "t2"}]
+        assert fake.released is True

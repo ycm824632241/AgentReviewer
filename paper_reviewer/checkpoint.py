@@ -85,10 +85,15 @@ def list_threads(db_path: str = DEFAULT_DB) -> List[dict]:
     """列出所有 thread 的 id。"""
     cp = get_checkpointer(db_path)
     try:
-        return [
-            {"thread_id": tpl.config["configurable"]["thread_id"]}
-            for tpl in cp.list(None)
-        ]
+        seen = set()
+        threads = []
+        for tpl in cp.list(None):
+            thread_id = tpl.config["configurable"]["thread_id"]
+            if thread_id in seen:
+                continue
+            seen.add(thread_id)
+            threads.append({"thread_id": thread_id})
+        return threads
     except Exception:
         return []
     finally:
