@@ -12,14 +12,6 @@ AgentReviewer 是一个基于 LangGraph 的多角色 AI 论文审稿系统，用
 - 使用 SQLite checkpointer 保存 LangGraph 状态，支持基于同一 `thread_id` 从一审继续进入 Rebuttal / 二审流程。
 - 提供 React + Vite 前端和 FastAPI API，支持论文上传、SSE 实时进度、审稿结果展示、Rebuttal 表单和历史记录查看。
 
-## 推荐仓库描述
-
-如果你在 GitHub 仓库 About 区域填写描述，可以使用：
-
-```text
-LangGraph-based multi-agent peer review system with RAG, FastAPI, React, SQLite checkpointing, and rebuttal workflow.
-```
-
 ## 配置
 
 复制环境变量示例，并填写 LLM 与 Embedding API 配置：
