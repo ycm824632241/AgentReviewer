@@ -9,7 +9,7 @@ RAG 检索模块 v2：真正的向量检索（Gitee AI Qwen3-Embedding-4B）。
 技术栈：
 - Embedding: Qwen3-Embedding-4B (1024 维, Gitee AI)
 - 向量检索: 余弦相似度（纯 Python，无需 FAISS）
-- 分块: 按章节边界 + 段落边界，~800 字/块
+- 分块: 按章节边界 + 段落边界，~500 字/块
 """
 import re
 import os
@@ -29,10 +29,26 @@ _client = OpenAI(
 )
 
 _EMBED_MODEL = os.getenv("GITEE_EMBED_MODEL", "Qwen3-Embedding-4B")
-_CHUNK_SIZE = 800
-_CHUNK_OVERLAP = 100
+_CHUNK_SIZE = 500
+_CHUNK_OVERLAP = 50
 _TOP_K = 5        # 短论文的默认值
 _TOP_K_MAX = 15  # 长论文的上限（防止输入过多）
+
+
+def _split_long_text(text: str, size: int, overlap: int) -> List[str]:
+    """Split a paragraph that has no natural breaks using a bounded sliding window."""
+    if len(text) <= size:
+        return [text]
+
+    step = max(1, size - overlap)
+    chunks = []
+    for start in range(0, len(text), step):
+        chunk = text[start:start + size].strip()
+        if chunk:
+            chunks.append(chunk)
+        if start + size >= len(text):
+            break
+    return chunks
 
 
 def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> List[str]:
@@ -60,6 +76,15 @@ def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLA
             paragraphs = re.split(r"\n\s*\n", section)
             current = ""
             for para in paragraphs:
+                para = para.strip()
+                if not para:
+                    continue
+                if len(para) > size:
+                    if current:
+                        chunks.append(current.strip())
+                        current = ""
+                    chunks.extend(_split_long_text(para, size, overlap))
+                    continue
                 if len(current) + len(para) <= size:
                     current += para + "\n"
                 else:
