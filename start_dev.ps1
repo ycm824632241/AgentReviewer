@@ -70,17 +70,20 @@ if (-not (Test-Path $EnvPath)) {
 
 Write-Host "Running backend startup checks..."
 $BackendCheckArgs = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", (Join-Path $ProjectRoot "start_web.ps1"),
     "-HostName", $BackendHost,
     "-Port", "$BackendPort",
     "-CheckOnly"
 )
-if ($Install) {
-    $BackendCheckArgs += "-Install"
-}
 if ($NoReload) {
     $BackendCheckArgs += "-NoReload"
 }
-& (Join-Path $ProjectRoot "start_web.ps1") @BackendCheckArgs
+& powershell @BackendCheckArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "Backend startup checks failed with exit code $LASTEXITCODE."
+}
 
 $BackendArgs = @(
     "-NoExit",
