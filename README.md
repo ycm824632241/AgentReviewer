@@ -6,12 +6,25 @@ LangGraph 多审稿人论文审稿 demo，支持 CLI 审稿和 FastAPI Web 界�
 
 如需在浏览器中使用审稿系统：
 
-```bash
-pip install -r requirements.txt
-uvicorn paper_reviewer.web:app --reload
+```powershell
+.\start_web.ps1 -Install
 ```
 
 浏览器打开 `http://localhost:8000`。
+
+后续依赖已安装时，可直接运行：
+
+```powershell
+.\start_web.ps1
+```
+
+常用参数：
+
+```powershell
+.\start_web.ps1 -Port 8080      # 使用 8080 端口
+.\start_web.ps1 -NoReload       # 关闭开发热重载
+.\start_web.ps1 -CheckOnly      # 只检查环境，不启动服务
+```
 
 ### 使用流程
 
