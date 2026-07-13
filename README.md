@@ -4,7 +4,23 @@ LangGraph 多审稿人论文审稿 demo，支持 CLI 审稿和 FastAPI Web 界�
 
 ## Web 界面
 
-开发模式采用前后端分离：
+推荐使用一键开发启动脚本。它会检查 Python/npm，可选安装依赖，分别启动 FastAPI 后端和 Vite 前端，并打开 `http://localhost:5173`：
+
+```powershell
+.\start_dev.ps1
+```
+
+常用参数：
+
+```powershell
+.\start_dev.ps1 -Install
+.\start_dev.ps1 -BackendPort 8080
+.\start_dev.ps1 -FrontendPort 5174
+.\start_dev.ps1 -NoOpen
+.\start_dev.ps1 -NoReload
+```
+
+也可以手动用两个终端启动前后端：
 
 ```powershell
 ## Terminal 1: backend
