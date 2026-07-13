@@ -45,19 +45,30 @@ function Quote-ForPowerShell {
     return "'" + ($Value -replace "'", "''") + "'"
 }
 
+function Assert-LastExitCode {
+    param([string]$CommandName)
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "$CommandName failed with exit code $LASTEXITCODE."
+    }
+}
+
 Write-Host "Checking Python and npm..."
 $PythonCmd = Resolve-Python
 $NpmExe = Resolve-Npm
 & $NpmExe --version | Out-Null
+Assert-LastExitCode "npm --version"
 
 if ($Install) {
     Write-Host "Installing Python dependencies..."
     & $PythonCmd.Exe @($PythonCmd.Args) -m pip install -r (Join-Path $ProjectRoot "requirements.txt")
+    Assert-LastExitCode "pip install"
 
     Write-Host "Installing frontend dependencies..."
     Push-Location $FrontendRoot
     try {
         & $NpmExe install
+        Assert-LastExitCode "npm install"
     } finally {
         Pop-Location
     }
@@ -81,9 +92,7 @@ if ($NoReload) {
     $BackendCheckArgs += "-NoReload"
 }
 & powershell @BackendCheckArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "Backend startup checks failed with exit code $LASTEXITCODE."
-}
+Assert-LastExitCode "backend startup checks"
 
 $BackendArgs = @(
     "-NoExit",
@@ -97,6 +106,7 @@ if ($NoReload) {
 }
 
 $FrontendCommand = @(
+    "`$env:VITE_BACKEND_PROXY_TARGET = $(Quote-ForPowerShell "http://${BackendHost}:${BackendPort}")",
     "Set-Location -LiteralPath $(Quote-ForPowerShell $FrontendRoot)",
     "& $(Quote-ForPowerShell $NpmExe) run dev -- --host $(Quote-ForPowerShell $FrontendHost) --port $FrontendPort"
 ) -join "; "

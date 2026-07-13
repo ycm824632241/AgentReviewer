@@ -37,3 +37,28 @@ Tests run and exact outcomes:
 
 Concerns:
 - `docs/superpowers/plans/2026-07-13-one-click-dev-start.md` and `docs/superpowers/specs/2026-07-13-one-click-dev-start-design.md` remain untracked and were left untouched.
+
+## Final Review Fix
+
+Status: completed
+
+Files changed:
+- start_dev.ps1
+- frontend/vite.config.ts
+- tests/test_start_dev.py
+- .superpowers/sdd/one-click-dev-start-task-1-report.md
+
+Fixes:
+- Vite now reads `/api` proxy target from `VITE_BACKEND_PROXY_TARGET`, falling back to `http://127.0.0.1:8000`.
+- `start_dev.ps1` sets `VITE_BACKEND_PROXY_TARGET` for the frontend child PowerShell command from `BackendHost` and `BackendPort`, so `.\start_dev.ps1 -BackendPort 8080` proxies to `http://127.0.0.1:8080`.
+- Added `Assert-LastExitCode` and explicit checks after `npm --version`, `pip install`, `npm install`, and backend startup checks.
+
+Tests run and exact outcomes:
+- `python -m pytest tests/test_start_dev.py` before production changes -> exit 1, 2 failed. Failures showed missing `VITE_BACKEND_PROXY_TARGET` in `frontend/vite.config.ts` and missing `function Assert-LastExitCode` in `start_dev.ps1`.
+- `python -m pytest tests/test_start_dev.py` after fix -> exit 0, `2 passed in 0.10s`.
+- `powershell -NoProfile -Command "[void][scriptblock]::Create((Get-Content -Raw .\start_dev.ps1)); 'syntax ok'"` -> exit 0, output `syntax ok`.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File .\start_web.ps1 -CheckOnly` -> exit 0, output included `runtime dependencies ok`, `React build detected. FastAPI will serve frontend/dist.`, and `Startup checks completed.`
+- `npm run build` from `frontend` -> exit 0, TypeScript and Vite build completed, output included `✓ built in 144ms`.
+
+Concerns:
+- Initial non-escalated command attempts for pytest and verification failed before execution with Windows sandbox `CreateProcessAsUserW failed: 5`; the same commands were rerun with escalation and produced the outcomes above.
