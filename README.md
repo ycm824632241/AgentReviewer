@@ -4,20 +4,16 @@ LangGraph 多审稿人论文审稿 demo，支持 CLI 审稿和 FastAPI Web 界�
 
 ## Web 界面
 
-推荐使用一键开发启动脚本。它会检查 Python/npm，可选安装依赖，分别启动 FastAPI 后端和 Vite 前端，并打开 `http://localhost:5173`：
+推荐使用一键开发启动脚本。它会分别启动 FastAPI 后端和 Vite 前端：
 
 ```powershell
 .\start_dev.ps1
 ```
 
-常用参数：
+第一次运行或依赖缺失时，可以加 `-Install`：
 
 ```powershell
 .\start_dev.ps1 -Install
-.\start_dev.ps1 -BackendPort 8080
-.\start_dev.ps1 -FrontendPort 5174
-.\start_dev.ps1 -NoOpen
-.\start_dev.ps1 -NoReload
 ```
 
 也可以手动用两个终端启动前后端：
@@ -36,7 +32,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`。Vite 默认代理到 `http://127.0.0.1:8000`；使用 `start_dev.ps1` 时，`BackendHost` / `BackendPort` 会通过 `VITE_BACKEND_PROXY_TARGET` 覆盖这个目标。
+浏览器打开 `http://localhost:5173`。Vite 默认代理到 `http://127.0.0.1:8000`。
 
 演示模式可以先构建前端，再由 FastAPI 托管静态文件：
 
