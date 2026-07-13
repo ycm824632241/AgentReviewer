@@ -45,6 +45,13 @@ if (-not (Test-Path $EnvPath)) {
     Write-Warning "20-multi-agent-debate\.env was not found. The Web UI can start, but real review jobs need LLM API settings."
 }
 
+$FrontendDist = Join-Path $ProjectRoot "frontend\dist\index.html"
+if (Test-Path $FrontendDist) {
+    Write-Host "React build detected. FastAPI will serve frontend/dist."
+} else {
+    Write-Host "React build not found. Use frontend npm run dev for the React UI during development."
+}
+
 if ($CheckOnly) {
     Write-Host "Startup checks completed."
     exit 0
