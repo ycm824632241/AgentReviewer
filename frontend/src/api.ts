@@ -1,4 +1,4 @@
-import type { HistoryResponse, ProgressEvent, RebuttalInfoResponse, ReviewResultResponse } from "./types";
+import type { HistoryResponse, ProgressEvent, RebuttalInfoResponse, ReviewResultResponse, SettingsPayload, SettingsUpdate } from "./types";
 
 async function readJson<T>(response: Response, action: string): Promise<T> {
   if (!response.ok) {
@@ -31,6 +31,21 @@ export async function submitRebuttal(threadId: string, target: string, text: str
 
 export async function fetchHistory(): Promise<HistoryResponse> {
   return readJson(await fetch("/api/history"), "读取历史记录");
+}
+
+export async function fetchSettings(): Promise<SettingsPayload> {
+  return readJson(await fetch("/api/settings"), "读取设置");
+}
+
+export async function saveSettings(settings: SettingsUpdate): Promise<SettingsPayload> {
+  return readJson(
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings)
+    }),
+    "保存设置"
+  );
 }
 
 export function openProgressStream(threadId: string, onEvent: (event: ProgressEvent) => void): EventSource {

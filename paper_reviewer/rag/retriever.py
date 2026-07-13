@@ -22,12 +22,6 @@ load_dotenv(dotenv_path=env_path)
 
 from openai import OpenAI
 
-# Gitee AI Embedding API
-_client = OpenAI(
-    api_key=os.getenv("GITEE_API_KEY", ""),
-    base_url=os.getenv("GITEE_BASE_URL", "https://ai.gitee.com/v1"),
-)
-
 _EMBED_MODEL = os.getenv("GITEE_EMBED_MODEL", "Qwen3-Embedding-4B")
 _CHUNK_SIZE = 1000
 _CHUNK_OVERLAP = 150
@@ -143,7 +137,12 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
 
 def _embed(texts: List[str]) -> List[List[float]]:
     """批量获取 embedding 向量。"""
-    resp = _client.embeddings.create(model=_EMBED_MODEL, input=texts)
+    client = OpenAI(
+        api_key=os.getenv("GITEE_API_KEY", ""),
+        base_url=os.getenv("GITEE_BASE_URL", "https://ai.gitee.com/v1"),
+    )
+    model = os.getenv("GITEE_EMBED_MODEL", _EMBED_MODEL)
+    resp = client.embeddings.create(model=model, input=texts)
     return [item.embedding for item in resp.data]
 
 

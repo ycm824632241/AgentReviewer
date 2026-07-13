@@ -57,3 +57,28 @@ export type HistoryItem = {
 export type HistoryResponse = {
   threads: HistoryItem[];
 };
+
+export type ModelSettings = {
+  base_url: string;
+  api_key: string;
+  api_key_set: boolean;
+  model: string;
+};
+
+export type SettingsPayload = {
+  llm: ModelSettings;
+  embedding: ModelSettings;
+};
+
+export type SettingsUpdate = {
+  llm: {
+    base_url: string;
+    api_key: string;
+    model: string;
+  };
+  embedding: {
+    base_url: string;
+    api_key: string;
+    model: string;
+  };
+};

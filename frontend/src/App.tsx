@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { fetchHistory, fetchResult, fetchRebuttalInfo, openProgressStream, submitRebuttal, uploadPaper } from "./api";
-import type { HistoryItem, ProgressEvent, RebuttalInfoResponse, ReviewResultResponse, ReviewState } from "./types";
+import { fetchHistory, fetchResult, fetchRebuttalInfo, fetchSettings, openProgressStream, saveSettings, submitRebuttal, uploadPaper } from "./api";
+import type { HistoryItem, ProgressEvent, RebuttalInfoResponse, ReviewResultResponse, ReviewState, SettingsPayload, SettingsUpdate } from "./types";
 
 const reviewerReports: Array<[keyof ReviewState, string]> = [
   ["eic_report", "Editor-in-Chief"],
@@ -17,6 +17,7 @@ type ActiveStream = {
 };
 
 type RecordValue = Record<string, unknown>;
+type ActiveView = "review" | "history" | "settings";
 
 const scoreLabels: Record<string, string> = {
   originality: "原创性",
@@ -231,17 +232,135 @@ function ReviewerPager({
   );
 }
 
+function SettingsField({
+  label,
+  envName,
+  value,
+  onChange,
+  type = "text",
+  placeholder = ""
+}: {
+  label: string;
+  envName: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  placeholder?: string;
+}) {
+  return (
+    <label className="settings-field">
+      <span>{label}</span>
+      <small>{envName}</small>
+      <input type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function SettingsPanel({
+  settings,
+  form,
+  onFieldChange,
+  onSave,
+  busy,
+  saved
+}: {
+  settings: SettingsPayload | null;
+  form: SettingsUpdate;
+  onFieldChange: (group: keyof SettingsUpdate, field: keyof SettingsUpdate["llm"], value: string) => void;
+  onSave: () => void;
+  busy: boolean;
+  saved: boolean;
+}) {
+  const llmKeyPlaceholder = settings?.llm.api_key_set ? settings.llm.api_key : "未配置";
+  const embeddingKeyPlaceholder = settings?.embedding.api_key_set ? settings.embedding.api_key : "未配置";
+
+  return (
+    <section className="panel settings-panel">
+      <div className="panel-heading">
+        <div>
+          <h2>模型配置</h2>
+          <p className="muted">保存后，新发起的审稿任务会使用新的模型连接参数。</p>
+        </div>
+        <span className="status-pill">{settings?.llm.api_key_set && settings?.embedding.api_key_set ? "已配置" : "未完整配置"}</span>
+      </div>
+
+      <div className="settings-grid">
+        <section className="settings-card">
+          <h3>审稿 LLM</h3>
+          <SettingsField
+            label="API Base URL"
+            envName="MIMO_BASE_URL"
+            value={form.llm.base_url}
+            onChange={(value) => onFieldChange("llm", "base_url", value)}
+          />
+          <SettingsField
+            label="API Key"
+            envName="MIMO_API_KEY"
+            type="password"
+            value={form.llm.api_key}
+            placeholder={llmKeyPlaceholder}
+            onChange={(value) => onFieldChange("llm", "api_key", value)}
+          />
+          <SettingsField
+            label="模型名称"
+            envName="MIMO_MODEL_DEBATER"
+            value={form.llm.model}
+            onChange={(value) => onFieldChange("llm", "model", value)}
+          />
+        </section>
+
+        <section className="settings-card">
+          <h3>Embedding 模型</h3>
+          <SettingsField
+            label="Embedding API Base URL"
+            envName="GITEE_BASE_URL"
+            value={form.embedding.base_url}
+            onChange={(value) => onFieldChange("embedding", "base_url", value)}
+          />
+          <SettingsField
+            label="Embedding API Key"
+            envName="GITEE_API_KEY"
+            type="password"
+            value={form.embedding.api_key}
+            placeholder={embeddingKeyPlaceholder}
+            onChange={(value) => onFieldChange("embedding", "api_key", value)}
+          />
+          <SettingsField
+            label="Embedding 模型名称"
+            envName="GITEE_EMBED_MODEL"
+            value={form.embedding.model}
+            onChange={(value) => onFieldChange("embedding", "model", value)}
+          />
+        </section>
+      </div>
+
+      <div className="settings-actions">
+        <button onClick={onSave} disabled={busy}>{busy ? "保存中" : "保存设置"}</button>
+        {saved && <span className="saved-note">设置已保存</span>}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
+  const [activeView, setActiveView] = useState<ActiveView>("review");
   const [file, setFile] = useState<File | null>(null);
   const [threadId, setThreadId] = useState("");
   const [events, setEvents] = useState<ProgressEvent[]>([]);
   const [result, setResult] = useState<ReviewResultResponse | null>(null);
   const [rebuttalInfo, setRebuttalInfo] = useState<RebuttalInfoResponse | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [settings, setSettings] = useState<SettingsPayload | null>(null);
+  const [settingsForm, setSettingsForm] = useState<SettingsUpdate>({
+    llm: { base_url: "", api_key: "", model: "" },
+    embedding: { base_url: "", api_key: "", model: "" }
+  });
   const [target, setTarget] = useState("all");
   const [rebuttalText, setRebuttalText] = useState("");
   const [reviewerPage, setReviewerPage] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
   const [error, setError] = useState("");
   const activeStreamRef = useRef<ActiveStream | null>(null);
   const selectedThreadRef = useRef("");
@@ -260,6 +379,44 @@ export default function App() {
   async function refreshHistory() {
     const data = await fetchHistory();
     setHistory(data.threads);
+  }
+
+  async function refreshSettings() {
+    const data = await fetchSettings();
+    setSettings(data);
+    setSettingsForm({
+      llm: { base_url: data.llm.base_url, api_key: "", model: data.llm.model },
+      embedding: { base_url: data.embedding.base_url, api_key: "", model: data.embedding.model }
+    });
+  }
+
+  function updateSettingsField(group: keyof SettingsUpdate, field: keyof SettingsUpdate["llm"], value: string) {
+    setSettingsSaved(false);
+    setSettingsForm((prev) => ({
+      ...prev,
+      [group]: {
+        ...prev[group],
+        [field]: value
+      }
+    }));
+  }
+
+  async function handleSaveSettings() {
+    setSettingsBusy(true);
+    setError("");
+    try {
+      const data = await saveSettings(settingsForm);
+      setSettings(data);
+      setSettingsForm({
+        llm: { base_url: data.llm.base_url, api_key: "", model: data.llm.model },
+        embedding: { base_url: data.embedding.base_url, api_key: "", model: data.embedding.model }
+      });
+      setSettingsSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存设置失败");
+    } finally {
+      setSettingsBusy(false);
+    }
   }
 
   async function loadResult(id: string): Promise<ReviewResultResponse> {
@@ -395,6 +552,7 @@ export default function App() {
   async function openHistory(id: string) {
     stopActiveStream();
     selectedThreadRef.current = id;
+    setActiveView("review");
     setThreadId(id);
     setEvents([]);
     setError("");
@@ -415,6 +573,7 @@ export default function App() {
 
   useEffect(() => {
     refreshHistory().catch((err) => setError(err instanceof Error ? err.message : "读取历史记录失败"));
+    refreshSettings().catch((err) => setError(err instanceof Error ? err.message : "读取设置失败"));
     return () => {
       const active = activeStreamRef.current;
       active?.source.close();
@@ -428,17 +587,36 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
+      <header className="console-nav">
+        <button className="brand-button" onClick={() => setActiveView("review")}>
+          <span className="brand-dot" />
+          AgentReviewer
+        </button>
+        <nav className="nav-tabs" aria-label="主导航">
+          <button className={activeView === "review" ? "active" : ""} onClick={() => setActiveView("review")}>审稿台</button>
+          <button className={activeView === "history" ? "active" : ""} onClick={() => setActiveView("history")}>历史记录</button>
+          <button className={activeView === "settings" ? "active" : ""} onClick={() => setActiveView("settings")}>设置</button>
+        </nav>
+        <button className="nav-more" aria-label="更多">...</button>
+      </header>
+
+      <section className="hero-row">
         <div>
-          <p className="eyebrow">LangGraph Peer Review Agent</p>
-          <h1>AgentReviewer</h1>
+          <h1>{activeView === "settings" ? "设置" : activeView === "history" ? "历史记录" : "审稿台"}</h1>
+          <p className="muted">
+            {activeView === "settings"
+              ? "配置审稿 LLM 与 Embedding 模型连接参数。"
+              : activeView === "history"
+                ? "查看历史审稿线程，点击任意论文回到审稿台继续查看。"
+                : "上传论文后，系统会并行生成多角色审稿意见，并由编辑综合最终决定。"}
+          </p>
         </div>
         <span className="status-pill">{progressLabel}</span>
-      </header>
+      </section>
 
       {error && <div className="error-banner">{error}</div>}
 
-      <section className="layout-grid">
+      {activeView === "review" && <section className="layout-grid">
         <div className="main-column">
           <section className="panel">
             <h2>论文上传</h2>
@@ -490,21 +668,39 @@ export default function App() {
               {result?.locked ? "二审已完成" : "提交 Rebuttal"}
             </button>
           </section>
-
-          <section className="panel">
-            <h2>历史记录</h2>
-            <div className="history-list">
-              {history.map((item) => (
-                <button key={item.thread_id} onClick={() => openHistory(item.thread_id)}>
-                  <span className="history-title">{item.title || "未命名论文"}</span>
-                  <small>{item.thread_id}</small>
-                </button>
-              ))}
-            </div>
-            {history.length === 0 && <p className="muted">暂无历史记录。</p>}
-          </section>
         </aside>
-      </section>
+      </section>}
+
+      {activeView === "history" && (
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <h2>历史记录</h2>
+              <p className="muted">按论文标题展示历史任务，点击后加载对应 thread。</p>
+            </div>
+          </div>
+          <div className="history-list history-page-list">
+            {history.map((item) => (
+              <button key={item.thread_id} onClick={() => openHistory(item.thread_id)}>
+                <span className="history-title">{item.title || "未命名论文"}</span>
+                <small>{item.thread_id}</small>
+              </button>
+            ))}
+          </div>
+          {history.length === 0 && <p className="muted">暂无历史记录。</p>}
+        </section>
+      )}
+
+      {activeView === "settings" && (
+        <SettingsPanel
+          settings={settings}
+          form={settingsForm}
+          onFieldChange={updateSettingsField}
+          onSave={handleSaveSettings}
+          busy={settingsBusy}
+          saved={settingsSaved}
+        />
+      )}
     </main>
   );
 }

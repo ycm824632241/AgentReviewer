@@ -60,3 +60,42 @@ def test_editor_decision_shows_integrated_revision_issues():
     assert "revision_direction" in app
     assert "effort" not in app
     assert "给作者的问题" not in app
+
+
+def test_console_navigation_keeps_rebuttal_inside_review_workspace():
+    app = read_frontend("App.tsx")
+
+    assert "type ActiveView" in app
+    assert "审稿台" in app
+    assert "历史记录" in app
+    assert "设置" in app
+    assert "Rebuttal" in app
+    assert '"rebuttal"' not in app
+
+
+def test_settings_page_exposes_llm_and_embedding_config():
+    app = read_frontend("App.tsx")
+    api = read_frontend("api.ts")
+    types = read_frontend("types.ts")
+
+    assert "function SettingsPanel" in app
+    assert "审稿 LLM" in app
+    assert "Embedding 模型" in app
+    assert "MIMO_BASE_URL" in app
+    assert "MIMO_MODEL_DEBATER" in app
+    assert "GITEE_BASE_URL" in app
+    assert "GITEE_EMBED_MODEL" in app
+    assert "fetchSettings" in api
+    assert "saveSettings" in api
+    assert "type SettingsPayload" in types
+
+
+def test_console_style_uses_reference_like_black_and_white_shell():
+    css = read_frontend("styles.css")
+
+    assert ".console-nav" in css
+    assert ".hero-row" in css
+    assert ".settings-grid" in css
+    assert "background: #fff" in css
+    assert "border: 1px solid #e5e5e5" in css
+    assert "background: #0b0b0b" in css

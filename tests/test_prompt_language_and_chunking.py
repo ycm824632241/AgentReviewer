@@ -55,3 +55,47 @@ def test_retrieve_falls_back_when_query_embedding_fails(monkeypatch):
     assert selected_chunks
     assert len(selected_chunks) <= retriever._TOP_K_MAX
     assert "chunk-0" in selected_chunks
+
+
+def test_embed_uses_current_embedding_environment(monkeypatch):
+    calls = {}
+
+    class StaleClient:
+        class embeddings:
+            @staticmethod
+            def create(*_args, **_kwargs):
+                raise AssertionError("stale embedding client was used")
+
+    class FakeClient:
+        def __init__(self, api_key, base_url):
+            calls["api_key"] = api_key
+            calls["base_url"] = base_url
+            self.embeddings = self
+
+        def create(self, model, input):
+            calls["model"] = model
+            calls["input"] = input
+
+            class Item:
+                embedding = [0.1, 0.2]
+
+            class Response:
+                data = [Item()]
+
+            return Response()
+
+    monkeypatch.setattr(retriever, "_client", StaleClient(), raising=False)
+    monkeypatch.setattr(retriever, "OpenAI", FakeClient)
+    monkeypatch.setenv("GITEE_API_KEY", "runtime-key")
+    monkeypatch.setenv("GITEE_BASE_URL", "https://runtime-embed.example/v1")
+    monkeypatch.setenv("GITEE_EMBED_MODEL", "runtime-embed-model")
+
+    embeddings = retriever._embed(["hello"])
+
+    assert embeddings == [[0.1, 0.2]]
+    assert calls == {
+        "api_key": "runtime-key",
+        "base_url": "https://runtime-embed.example/v1",
+        "model": "runtime-embed-model",
+        "input": ["hello"],
+    }
