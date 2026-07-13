@@ -16,6 +16,7 @@ BASE_DIR = os.path.dirname(__file__)
 PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
 FRONTEND_DIST = os.path.join(PROJECT_ROOT, "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
+SETTINGS_ENV_PATH = os.path.join(PROJECT_ROOT, "20-multi-agent-debate", ".env")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 app = FastAPI(title="AgentReviewer")
@@ -37,6 +38,25 @@ REVIEWER_ROLE_TARGETS = {
     "Devil's Advocate": "devils_advocate",
 }
 
+SETTINGS_KEYS = {
+    "llm": {
+        "base_url": "MIMO_BASE_URL",
+        "api_key": "MIMO_API_KEY",
+        "model": "MIMO_MODEL_DEBATER",
+    },
+    "embedding": {
+        "base_url": "GITEE_BASE_URL",
+        "api_key": "GITEE_API_KEY",
+        "model": "GITEE_EMBED_MODEL",
+    },
+}
+SETTINGS_DEFAULTS = {
+    "MIMO_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
+    "MIMO_MODEL_DEBATER": "mimo-v2.5-pro",
+    "GITEE_BASE_URL": "https://ai.gitee.com/v1",
+    "GITEE_EMBED_MODEL": "Qwen3-Embedding-4B",
+}
+
 
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
@@ -47,6 +67,88 @@ def _release_graph_checkpointer(graph_app) -> None:
     checkpointer = getattr(graph_app, "checkpointer", None)
     if hasattr(checkpointer, "release"):
         checkpointer.release()
+
+
+def _read_env_file(path: str | None = None) -> dict[str, str]:
+    path = path or SETTINGS_ENV_PATH
+    values: dict[str, str] = {}
+    if not os.path.exists(path):
+        return values
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _mask_secret(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 4:
+        return "*" * len(value)
+    return "*" * (len(value) - 4) + value[-4:]
+
+
+def _settings_payload(values: dict[str, str]) -> dict:
+    payload = {}
+    for group, keys in SETTINGS_KEYS.items():
+        api_key = values.get(keys["api_key"], "")
+        payload[group] = {
+            "base_url": values.get(keys["base_url"], SETTINGS_DEFAULTS.get(keys["base_url"], "")),
+            "api_key": _mask_secret(api_key),
+            "api_key_set": bool(api_key),
+            "model": values.get(keys["model"], SETTINGS_DEFAULTS.get(keys["model"], "")),
+        }
+    return payload
+
+
+def _write_env_updates(updates: dict[str, str], path: str | None = None) -> None:
+    path = path or SETTINGS_ENV_PATH
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lines = []
+    seen = set()
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+    next_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                next_lines.append(f"{key}={updates[key]}\n")
+                seen.add(key)
+                continue
+        next_lines.append(line)
+
+    for group in SETTINGS_KEYS.values():
+        for key in group.values():
+            if key in updates and key not in seen:
+                next_lines.append(f"{key}={updates[key]}\n")
+                seen.add(key)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(next_lines)
+
+
+def _settings_updates_from_payload(payload: dict) -> dict[str, str]:
+    updates: dict[str, str] = {}
+    for group_name, keys in SETTINGS_KEYS.items():
+        group = payload.get(group_name, {})
+        if not isinstance(group, dict):
+            continue
+        for field, env_key in keys.items():
+            if field not in group:
+                continue
+            value = str(group[field]).strip()
+            if field == "api_key" and not value:
+                continue
+            updates[env_key] = value
+    return updates
 
 
 # ── 节点中文名（用于前端展示） ──
@@ -284,6 +386,20 @@ async def api_submit_rebuttal(
 @app.get("/api/history")
 async def api_history():
     return {"threads": list_threads()}
+
+
+@app.get("/api/settings")
+async def api_settings():
+    return _settings_payload(_read_env_file())
+
+
+@app.post("/api/settings")
+async def api_update_settings(payload: dict):
+    updates = _settings_updates_from_payload(payload)
+    _write_env_updates(updates)
+    for key, value in updates.items():
+        os.environ[key] = value
+    return _settings_payload(_read_env_file())
 
 
 @app.get("/", response_class=HTMLResponse)

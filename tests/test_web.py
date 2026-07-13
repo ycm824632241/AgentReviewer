@@ -413,6 +413,75 @@ class TestApiEndpoints:
         assert r.status_code == 200
         assert r.json() == {"threads": [{"thread_id": "a"}, {"thread_id": "b"}]}
 
+    def test_api_settings_reads_masked_model_config(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "MIMO_BASE_URL=https://llm.example/v1",
+                    "MIMO_API_KEY=llm-secret-key",
+                    "MIMO_MODEL_DEBATER=mimo-test",
+                    "GITEE_BASE_URL=https://embed.example/v1",
+                    "GITEE_API_KEY=embed-secret-key",
+                    "GITEE_EMBED_MODEL=embed-test",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
+
+        r = client.get("/api/settings")
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "llm": {
+                "base_url": "https://llm.example/v1",
+                "api_key": "**********-key",
+                "api_key_set": True,
+                "model": "mimo-test",
+            },
+            "embedding": {
+                "base_url": "https://embed.example/v1",
+                "api_key": "************-key",
+                "api_key_set": True,
+                "model": "embed-test",
+            },
+        }
+
+    def test_api_settings_writes_supported_model_config(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "UNRELATED=value\nMIMO_API_KEY=old-llm-key\nGITEE_API_KEY=old-embed-key\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
+
+        r = client.post(
+            "/api/settings",
+            json={
+                "llm": {
+                    "base_url": "https://new-llm.example/v1",
+                    "api_key": "new-llm-key",
+                    "model": "new-chat-model",
+                },
+                "embedding": {
+                    "base_url": "https://new-embed.example/v1",
+                    "api_key": "",
+                    "model": "new-embed-model",
+                },
+            },
+        )
+
+        assert r.status_code == 200
+        text = env_file.read_text(encoding="utf-8")
+        assert "UNRELATED=value" in text
+        assert "MIMO_BASE_URL=https://new-llm.example/v1" in text
+        assert "MIMO_API_KEY=new-llm-key" in text
+        assert "MIMO_MODEL_DEBATER=new-chat-model" in text
+        assert "GITEE_BASE_URL=https://new-embed.example/v1" in text
+        assert "GITEE_API_KEY=old-embed-key" in text
+        assert "GITEE_EMBED_MODEL=new-embed-model" in text
+
     def test_api_progress_endpoint_is_sse(self):
         web._task_status["api-progress"] = {"done": [], "finished": True}
 
