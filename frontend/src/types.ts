@@ -7,7 +7,12 @@ export type ProgressEvent = {
 export type ReviewerConfig = {
   role?: string;
   name?: string;
+  target?: string;
   [key: string]: unknown;
+};
+
+export type RebuttalReviewer = ReviewerConfig & {
+  target: string;
 };
 
 export type ReviewState = {
@@ -29,13 +34,17 @@ export type ReviewState = {
 export type ReviewResultResponse = {
   thread_id: string;
   state: ReviewState | null;
-  progress: Record<string, unknown>;
+  progress: {
+    finished?: boolean;
+    error?: string | null;
+    [key: string]: unknown;
+  };
   locked: boolean;
 };
 
 export type RebuttalInfoResponse = {
   thread_id: string;
-  reviewers: ReviewerConfig[];
+  reviewers: RebuttalReviewer[];
   round_number: number;
   locked: boolean;
 };

@@ -35,27 +35,29 @@ export default function App() {
   const activeStreamRef = useRef<ActiveStream | null>(null);
   const selectedThreadRef = useRef("");
 
-  const finished = events.some((event) => event.node === "__all__");
+  const finished = events.some((event) => event.node === "__all__") || result?.progress.finished === true;
+  const failed = events.some((event) => event.node === "__error__") || Boolean(result?.progress.error);
   const state = result?.state;
 
   const progressLabel = useMemo(() => {
     if (!threadId) return "等待上传";
+    if (failed) return "审稿失败";
     if (finished) return "审稿完成";
     return "审稿进行中";
-  }, [finished, threadId]);
+  }, [failed, finished, threadId]);
 
   async function refreshHistory() {
     const data = await fetchHistory();
     setHistory(data.threads);
   }
 
-  async function loadResult(id: string) {
+  async function loadResult(id: string): Promise<ReviewResultResponse> {
     const data = await fetchResult(id);
-    if (selectedThreadRef.current !== id) return;
+    if (selectedThreadRef.current !== id) return data;
 
     setResult(data);
     setRebuttalInfo(null);
-    if (!data.state) return;
+    if (!data.state) return data;
 
     try {
       const info = await fetchRebuttalInfo(id);
@@ -67,6 +69,7 @@ export default function App() {
         setError(err instanceof Error ? err.message : "读取 Rebuttal 信息失败");
       }
     }
+    return data;
   }
 
   function isActiveStream(id: string, source: EventSource) {
@@ -187,7 +190,11 @@ export default function App() {
     setResult(null);
     setRebuttalInfo(null);
     try {
-      await loadResult(id);
+      const data = await loadResult(id);
+      if (selectedThreadRef.current !== id) return;
+      if (!data.progress.finished && !data.progress.error) {
+        listenProgress(id);
+      }
     } catch (err) {
       if (selectedThreadRef.current === id) {
         setError(err instanceof Error ? err.message : "读取审稿结果失败");
@@ -266,7 +273,7 @@ export default function App() {
             <select value={target} onChange={(event) => setTarget(event.target.value)} disabled={busy || result?.locked}>
               <option value="all">全部审稿人</option>
               {(rebuttalInfo?.reviewers ?? []).map((reviewer) => (
-                <option key={String(reviewer.role)} value={String(reviewer.role)}>{reviewer.name ?? reviewer.role}</option>
+                <option key={reviewer.target} value={reviewer.target}>{reviewer.name ?? reviewer.role ?? reviewer.target}</option>
               ))}
             </select>
             <textarea value={rebuttalText} onChange={(event) => setRebuttalText(event.target.value)} disabled={busy || result?.locked} rows={8} />

@@ -274,6 +274,14 @@ class TestApiEndpoints:
             "locked": True,
         }
 
+    def test_api_result_rejects_unknown_thread(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        r = client.get("/api/result/unknown-result-thread")
+
+        assert r.status_code == 404
+        assert r.json()["detail"] == "thread not found"
+
     def test_api_rebuttal_info_rejects_missing_thread(self, monkeypatch):
         monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
 
@@ -285,7 +293,13 @@ class TestApiEndpoints:
     def test_api_rebuttal_info_returns_reviewers(self, monkeypatch):
         saved = {
             "round_number": 1,
-            "reviewer_configs": [{"role": "methodology", "name": "方法论专家"}],
+            "reviewer_configs": [
+                {"role": "EIC", "identity": "主编"},
+                {"role": "Methodology", "identity": "方法论专家"},
+                {"role": "Domain", "identity": "领域专家"},
+                {"role": "Perspective", "identity": "跨学科专家"},
+                {"role": "DevilsAdvocate", "identity": "批判学者"},
+            ],
         }
         monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: saved, raising=False)
 
@@ -294,7 +308,13 @@ class TestApiEndpoints:
         assert r.status_code == 200
         assert r.json() == {
             "thread_id": "api-thread",
-            "reviewers": [{"role": "methodology", "name": "方法论专家"}],
+            "reviewers": [
+                {"role": "EIC", "identity": "主编", "target": "eic"},
+                {"role": "Methodology", "identity": "方法论专家", "target": "methodology"},
+                {"role": "Domain", "identity": "领域专家", "target": "domain"},
+                {"role": "Perspective", "identity": "跨学科专家", "target": "perspective"},
+                {"role": "DevilsAdvocate", "identity": "批判学者", "target": "devils_advocate"},
+            ],
             "round_number": 1,
             "locked": False,
         }
@@ -315,6 +335,30 @@ class TestApiEndpoints:
         assert r.status_code == 200
         assert r.json() == {"status": "rebuttal_started", "round": 2, "thread_id": "api-thread"}
 
+    def test_api_submit_rebuttal_records_graph_build_error(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 1}, raising=False)
+
+        import paper_reviewer.graph as graph
+
+        def raise_graph_build_error():
+            raise RuntimeError("graph build failed")
+
+        monkeypatch.setattr(graph, "build_rebuttal_graph", raise_graph_build_error)
+
+        r = client.post(
+            "/api/rebuttal/graph-build-error",
+            data={"target": "eic", "text": "作者回应"},
+        )
+
+        assert r.status_code == 200
+        assert "graph build failed" in web._task_status["graph-build-error"]["error"]
+
+        retry = client.post(
+            "/api/rebuttal/graph-build-error",
+            data={"target": "eic", "text": "再次回应"},
+        )
+        assert retry.status_code != 409
+
     def test_api_history_returns_threads(self, monkeypatch):
         monkeypatch.setattr(web, "list_threads", lambda: [{"thread_id": "a"}, {"thread_id": "b"}], raising=False)
 
@@ -333,12 +377,32 @@ class TestApiEndpoints:
 
 
 class TestReactStaticHosting:
-    def test_api_routes_are_not_spa_fallback(self):
+    def test_api_routes_are_not_spa_fallback(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
         r = client.get("/api/result/static-missing")
 
-        assert r.status_code == 200
+        assert r.status_code == 404
         assert r.headers["content-type"].startswith("application/json")
-        assert r.json()["thread_id"] == "static-missing"
+        assert r.json()["detail"] == "thread not found"
+
+    def test_root_serves_react_build_when_present(self, monkeypatch, tmp_path):
+        index = tmp_path / "index.html"
+        index.write_text("<main id=\"react-root\">React bundle</main>", encoding="utf-8")
+        monkeypatch.setattr(web, "FRONTEND_INDEX", str(index), raising=False)
+
+        r = client.get("/")
+
+        assert r.status_code == 200
+        assert "react-root" in r.text
+
+    def test_root_preserves_jinja_index_without_react_build(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web, "FRONTEND_INDEX", str(tmp_path / "missing-index.html"), raising=False)
+
+        r = client.get("/")
+
+        assert r.status_code == 200
+        assert "上传并开始审稿" in r.text
 
     def test_unknown_route_without_dist_returns_404(self, monkeypatch, tmp_path):
         monkeypatch.setattr(web, "FRONTEND_INDEX", str(tmp_path / "missing-index.html"), raising=False)

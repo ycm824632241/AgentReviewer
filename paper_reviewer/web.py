@@ -27,6 +27,15 @@ if os.path.isdir(os.path.join(FRONTEND_DIST, "assets")):
 _paper_store: dict[str, str] = {}      # thread_id → 论文原文
 _task_status: dict[str, dict] = {}     # thread_id → {"done": [...], "current": "", "finished": bool, "error": str}
 VALID_REBUTTAL_TARGETS = {"eic", "methodology", "domain", "perspective", "devils_advocate", "all"}
+REVIEWER_ROLE_TARGETS = {
+    "EIC": "eic",
+    "Methodology": "methodology",
+    "Domain": "domain",
+    "Perspective": "perspective",
+    "Devil": "devils_advocate",
+    "DevilsAdvocate": "devils_advocate",
+    "Devil's Advocate": "devils_advocate",
+}
 
 
 def _wants_html(request: Request) -> bool:
@@ -140,9 +149,8 @@ def _decode_pdf(raw: bytes) -> str:
         return ""
 
 
-def _result_payload(thread_id: str) -> dict:
+def _result_payload(thread_id: str, saved: dict | None) -> dict:
     st = _task_status.get(thread_id, {})
-    saved = get_thread_state(thread_id)
     round_number = saved.get("round_number", 1) if saved else 1
     return {
         "thread_id": thread_id,
@@ -150,6 +158,15 @@ def _result_payload(thread_id: str) -> dict:
         "progress": st,
         "locked": round_number >= 2,
     }
+
+
+def _rebuttal_reviewers(reviewer_configs: list[dict]) -> list[dict]:
+    """Add API-safe rebuttal targets without changing saved reviewer metadata."""
+    reviewers = []
+    for config in reviewer_configs:
+        target = REVIEWER_ROLE_TARGETS.get(config.get("role"))
+        reviewers.append({**config, **({"target": target} if target else {})})
+    return reviewers
 
 
 @app.get("/progress/{thread_id}")
@@ -197,7 +214,10 @@ async def api_progress(thread_id: str):
 
 @app.get("/api/result/{thread_id}")
 async def api_result(thread_id: str):
-    return _result_payload(thread_id)
+    saved = get_thread_state(thread_id)
+    if saved is None and thread_id not in _task_status:
+        raise HTTPException(status_code=404, detail="thread not found")
+    return _result_payload(thread_id, saved)
 
 
 @app.get("/api/rebuttal/{thread_id}")
@@ -208,7 +228,7 @@ async def api_rebuttal_info(thread_id: str):
     round_number = saved.get("round_number", 1)
     return {
         "thread_id": thread_id,
-        "reviewers": saved.get("reviewer_configs", []),
+        "reviewers": _rebuttal_reviewers(saved.get("reviewer_configs", [])),
         "round_number": round_number,
         "locked": round_number >= 2,
     }
@@ -236,6 +256,8 @@ async def api_history():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
+    if os.path.exists(FRONTEND_INDEX):
+        return FileResponse(FRONTEND_INDEX)
     return templates.TemplateResponse(request, "index.html")
 
 
@@ -314,16 +336,16 @@ async def _submit_rebuttal_impl(
 
     from paper_reviewer.graph import build_rebuttal_graph
 
-    graph_app = build_rebuttal_graph()
-    config = {"configurable": {"thread_id": thread_id}}
-
     def _run():
-        inp = {
-            "rebuttal_text": text,
-            "rebuttal_target": target,
-            "round_number": next_round,
-        }
+        graph_app = None
         try:
+            graph_app = build_rebuttal_graph()
+            config = {"configurable": {"thread_id": thread_id}}
+            inp = {
+                "rebuttal_text": text,
+                "rebuttal_target": target,
+                "round_number": next_round,
+            }
             for chunk in graph_app.stream(inp, config=config):
                 for node_name in chunk:
                     _on_node_complete(thread_id, node_name)
@@ -332,7 +354,8 @@ async def _submit_rebuttal_impl(
         except Exception as e:
             _task_status.setdefault(thread_id, {})["error"] = repr(e)
         finally:
-            _release_graph_checkpointer(graph_app)
+            if graph_app is not None:
+                _release_graph_checkpointer(graph_app)
 
     background_tasks.add_task(_run)
     return {"status": "rebuttal_started", "round": next_round, "thread_id": thread_id}
