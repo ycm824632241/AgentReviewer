@@ -18,7 +18,7 @@ FRONTEND_DIST = os.path.join(PROJECT_ROOT, "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
-app = FastAPI(title="AI 论文审稿系统")
+app = FastAPI(title="AgentReviewer")
 
 if os.path.isdir(os.path.join(FRONTEND_DIST, "assets")):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")

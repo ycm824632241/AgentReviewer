@@ -352,7 +352,7 @@ export default function App() {
       <header className="topbar">
         <div>
           <p className="eyebrow">LangGraph Peer Review Agent</p>
-          <h1>AI 论文审稿控制台</h1>
+          <h1>AgentReviewer</h1>
         </div>
         <span className="status-pill">{progressLabel}</span>
       </header>
