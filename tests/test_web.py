@@ -1,4 +1,7 @@
 # tests/test_web.py
+import asyncio
+import json
+
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -274,6 +277,19 @@ class TestApiEndpoints:
             "locked": True,
         }
 
+    def test_api_result_marks_completed_checkpoint_finished_without_task_status(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"editorial_decision": "Accept"},
+            raising=False,
+        )
+
+        r = client.get("/api/result/checkpoint-completed-result")
+
+        assert r.status_code == 200
+        assert r.json()["progress"] == {"done": ["synthesizer"], "finished": True}
+
     def test_api_result_rejects_unknown_thread(self, monkeypatch):
         monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
 
@@ -374,6 +390,33 @@ class TestApiEndpoints:
 
         assert r.status_code == 200
         assert "text/event-stream" in r.headers.get("content-type", "")
+
+    def test_api_progress_unknown_thread_emits_error_and_terminates(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        response = asyncio.run(web.api_progress("missing-progress-thread"))
+        event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
+
+        assert json.loads(event.removeprefix("data: ").strip()) == {
+            "node": "__error__",
+            "status": "thread not found",
+        }
+
+    def test_api_progress_completed_checkpoint_emits_finished_without_task_status(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"dimension_scores": {"weighted_total": 80}},
+            raising=False,
+        )
+
+        response = asyncio.run(web.api_progress("checkpoint-completed-progress"))
+        event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
+
+        assert json.loads(event.removeprefix("data: ").strip()) == {
+            "node": "__all__",
+            "status": "finished",
+        }
 
 
 class TestReactStaticHosting:

@@ -133,6 +133,7 @@ async def upload(request: Request, file: UploadFile, background_tasks: Backgroun
     text = raw.decode("utf-8") if file.filename.endswith(".txt") else _decode_pdf(raw)
     thread_id = str(uuid.uuid4())
     _paper_store[thread_id] = text
+    _task_status[thread_id] = {"done": [], "current": ""}
     background_tasks.add_task(_run_review, thread_id, text, file.filename)
     if _wants_html(request):
         return RedirectResponse(f"/reviews/{thread_id}/progress", status_code=303)
@@ -155,9 +156,21 @@ def _result_payload(thread_id: str, saved: dict | None) -> dict:
     return {
         "thread_id": thread_id,
         "state": saved,
-        "progress": st,
+        "progress": (
+            {"done": ["synthesizer"], "finished": True}
+            if not st and _is_completed_review(saved)
+            else st
+        ),
         "locked": round_number >= 2,
     }
+
+
+def _is_completed_review(saved: dict | None) -> bool:
+    """Return whether a checkpoint has final synthesizer output to render."""
+    return bool(saved) and any(
+        saved.get(key)
+        for key in ("editorial_decision", "dimension_scores", "revision_roadmap", "consensus_analysis")
+    )
 
 
 def _rebuttal_reviewers(reviewer_configs: list[dict]) -> list[dict]:
@@ -173,6 +186,16 @@ def _rebuttal_reviewers(reviewer_configs: list[dict]) -> list[dict]:
 async def progress(thread_id: str):
     """SSE 流：实时推送所有已完成的节点 + 最终 finished/error 事件。"""
     async def event_stream():
+        if thread_id not in _task_status:
+            saved = get_thread_state(thread_id)
+            if _is_completed_review(saved):
+                yield "data: " + json.dumps({"node": "__all__", "status": "finished"}, ensure_ascii=False) + "\n\n"
+            elif saved is None:
+                yield "data: " + json.dumps({"node": "__error__", "status": "thread not found"}, ensure_ascii=False) + "\n\n"
+            else:
+                yield "data: " + json.dumps({"node": "__error__", "status": "thread is not active"}, ensure_ascii=False) + "\n\n"
+            return
+
         prev_done: list = []
         while True:
             st = _task_status.get(thread_id, {})
@@ -203,6 +226,7 @@ async def api_upload(file: UploadFile, background_tasks: BackgroundTasks):
     text = raw.decode("utf-8") if file.filename.endswith(".txt") else _decode_pdf(raw)
     thread_id = str(uuid.uuid4())
     _paper_store[thread_id] = text
+    _task_status[thread_id] = {"done": [], "current": ""}
     background_tasks.add_task(_run_review, thread_id, text, file.filename)
     return {"thread_id": thread_id}
 
