@@ -20,7 +20,7 @@ uvicorn paper_reviewer.web:app --reload
 3. 结果页查看各审稿人报告、最终分数和编辑决定。
 4. 点击“进入 Rebuttal 环节”，选择审稿人并提交逐点回应。
 5. 系统基于 checkpointer 使用同一个 `thread_id` 从一审状态继续二审。
-6. Rebuttal 最多 2 轮；达到上限后页面隐藏入口，接口也会拒绝继续提交。
+6. 审稿总轮次最多 2 轮：一审为第 1 轮，提交一次 Rebuttal 后进入第 2 轮；达到第 2 轮后页面隐藏入口，接口也会拒绝继续提交。
 
 ### API 端点
 
