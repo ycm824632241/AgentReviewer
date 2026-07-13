@@ -9,7 +9,7 @@ RAG 检索模块 v2：真正的向量检索（Gitee AI Qwen3-Embedding-4B）。
 技术栈：
 - Embedding: Qwen3-Embedding-4B (1024 维, Gitee AI)
 - 向量检索: 余弦相似度（纯 Python，无需 FAISS）
-- 分块: 按章节边界 + 段落边界，~500 字/块
+- 分块: 按章节边界 + 段落边界，~1000 字/块
 """
 import re
 import os
@@ -29,10 +29,10 @@ _client = OpenAI(
 )
 
 _EMBED_MODEL = os.getenv("GITEE_EMBED_MODEL", "Qwen3-Embedding-4B")
-_CHUNK_SIZE = 500
-_CHUNK_OVERLAP = 50
+_CHUNK_SIZE = 1000
+_CHUNK_OVERLAP = 150
 _TOP_K = 5        # 短论文的默认值
-_TOP_K_MAX = 15  # 长论文的上限（防止输入过多）
+_TOP_K_MAX = 20  # 长论文的上限（防止输入过多）
 
 
 def _split_long_text(text: str, size: int, overlap: int) -> List[str]:
@@ -49,6 +49,32 @@ def _split_long_text(text: str, size: int, overlap: int) -> List[str]:
         if start + size >= len(text):
             break
     return chunks
+
+
+def _select_fallback_chunks(chunks: List[str], limit: int) -> List[str]:
+    """Select a deterministic spread of chunks when semantic retrieval is unavailable."""
+    if len(chunks) <= limit:
+        return chunks
+    if limit <= 1:
+        return chunks[:1]
+
+    selected_indexes = []
+    seen = set()
+    max_index = len(chunks) - 1
+    for i in range(limit):
+        idx = round(i * max_index / (limit - 1))
+        if idx not in seen:
+            selected_indexes.append(idx)
+            seen.add(idx)
+
+    idx = 0
+    while len(selected_indexes) < limit and idx < len(chunks):
+        if idx not in seen:
+            selected_indexes.append(idx)
+            seen.add(idx)
+        idx += 1
+
+    return [chunks[i] for i in sorted(selected_indexes)]
 
 
 def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> List[str]:
@@ -146,8 +172,12 @@ class PaperIndex:
             # 按比例增长，但不超过上限
             actual_k = min(max(top_k, n_chunks // 4), _TOP_K_MAX, n_chunks)
 
-        # 获取查询的 embedding
-        query_emb = _embed([query])[0]
+        # 获取查询的 embedding。若外部 embedding API 暂时拒绝短查询，保留可用上下文。
+        try:
+            query_emb = _embed([query])[0]
+        except Exception:
+            return "\n\n---\n\n".join(_select_fallback_chunks(self.chunks, actual_k))
+
         # 计算与每个 chunk 的相似度
         scores = [
             (i, _cosine_similarity(query_emb, emb))
