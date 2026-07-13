@@ -80,4 +80,4 @@ def field_analyst_node(state: ReviewState) -> ReviewState:
     ))
     import json
     analysis = _safe_json_loads(_extract_json(result.content))
-    return {**analysis, "rag_index": rag_index}
+    return analysis

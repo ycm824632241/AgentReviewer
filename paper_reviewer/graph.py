@@ -1,3 +1,4 @@
+import hashlib
 from typing import List
 
 from langgraph.graph import StateGraph, END
@@ -13,11 +14,29 @@ from paper_reviewer.agents.synthesizer import synthesizer_node
 from paper_reviewer.agents.rebuttal_reviewer import build_rebuttal_report_node
 from paper_reviewer.utils import with_retry
 
+_RAG_INDEX_CACHE = {}
+
+
+def _get_rag_index(state: dict):
+    """Build a process-local RAG index without storing it in checkpoint state."""
+    paper = state.get("paper", "")
+    if len(paper) <= 3000:
+        return None
+
+    cache_key = hashlib.sha256(paper.encode("utf-8")).hexdigest()
+    if cache_key not in _RAG_INDEX_CACHE:
+        try:
+            from paper_reviewer.rag.retriever import PaperIndex
+            _RAG_INDEX_CACHE[cache_key] = PaperIndex(paper)
+        except Exception:
+            _RAG_INDEX_CACHE[cache_key] = None
+    return _RAG_INDEX_CACHE[cache_key]
+
 
 def _make_reviewer_lambda(node_fn):
-    """创建带 RAG 的审稿人 lambda，从 state 取 rag_index 并自带重试。"""
+    """创建带 RAG 的审稿人 lambda；索引只保存在进程内缓存，不进入 checkpoint。"""
     def node_with_rag(state):
-        rag_index = state.get("rag_index")
+        rag_index = state.get("rag_index") or _get_rag_index(state)
         return node_fn(state, rag_index)
     return with_retry(node_with_rag)
 
