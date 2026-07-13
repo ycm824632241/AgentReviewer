@@ -36,7 +36,7 @@ npm install
 npm run dev
 ```
 
-浏览器打开 `http://localhost:5173`。Vite 会把 `/api` 请求代理到 `http://127.0.0.1:8000`。
+浏览器打开 `http://localhost:5173`。Vite 默认代理到 `http://127.0.0.1:8000`；使用 `start_dev.ps1` 时，`BackendHost` / `BackendPort` 会通过 `VITE_BACKEND_PROXY_TARGET` 覆盖这个目标。
 
 演示模式可以先构建前端，再由 FastAPI 托管静态文件：
 

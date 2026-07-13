@@ -62,3 +62,27 @@ Tests run and exact outcomes:
 
 Concerns:
 - Initial non-escalated command attempts for pytest and verification failed before execution with Windows sandbox `CreateProcessAsUserW failed: 5`; the same commands were rerun with escalation and produced the outcomes above.
+
+## Final Re-Review Fix
+
+Status: completed
+
+Files changed:
+- start_dev.ps1
+- README.md
+- tests/test_start_dev.py
+- .superpowers/sdd/one-click-dev-start-task-1-report.md
+
+Fixes:
+- Backend child window launch now builds a quoted `-Command` string with `Quote-ForPowerShell` for `ProjectRoot`, `start_web.ps1`, and `BackendHost`, avoiding unquoted `-File` serialization when the repository path contains spaces.
+- README now documents `http://127.0.0.1:8000` as the default Vite proxy target and says `BackendHost` / `BackendPort` override it through `VITE_BACKEND_PROXY_TARGET`.
+
+Tests run and exact outcomes:
+- `py -3.11 -m pytest tests/test_start_dev.py -v` before production changes -> exit 1, 2 failed and 2 passed. Failures showed the missing quoted backend `-Command` launch contract and missing README default/custom proxy wording.
+- `py -3.11 -m pytest tests/test_start_dev.py -v` after fix -> exit 0, `4 passed in 0.06s`.
+- `powershell -NoProfile -Command "[void][scriptblock]::Create((Get-Content -Raw .\start_dev.ps1)); 'syntax ok'"` -> exit 0, output `syntax ok`.
+- `.\start_web.ps1 -CheckOnly` -> exit 0, output included `runtime dependencies ok`, `React build detected. FastAPI will serve frontend/dist.`, and `Startup checks completed.`
+- `npm run build` from `frontend` -> exit 0, TypeScript and Vite build completed, output included `✓ built in 142ms`.
+
+Concerns:
+- Initial non-escalated command attempts for pytest and PowerShell verification failed before execution with Windows sandbox `CreateProcessAsUserW failed: 5`; the same commands were rerun with escalation and produced the outcomes above.

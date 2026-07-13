@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $FrontendRoot = Join-Path $ProjectRoot "frontend"
+$BackendScript = Join-Path $ProjectRoot "start_web.ps1"
 Set-Location $ProjectRoot
 
 function Resolve-Python {
@@ -83,7 +84,7 @@ Write-Host "Running backend startup checks..."
 $BackendCheckArgs = @(
     "-NoProfile",
     "-ExecutionPolicy", "Bypass",
-    "-File", (Join-Path $ProjectRoot "start_web.ps1"),
+    "-File", $BackendScript,
     "-HostName", $BackendHost,
     "-Port", "$BackendPort",
     "-CheckOnly"
@@ -94,16 +95,19 @@ if ($NoReload) {
 & powershell @BackendCheckArgs
 Assert-LastExitCode "backend startup checks"
 
+$BackendCommandParts = @(
+    "Set-Location -LiteralPath $(Quote-ForPowerShell $ProjectRoot)",
+    "& $(Quote-ForPowerShell $BackendScript) -HostName $(Quote-ForPowerShell $BackendHost) -Port $BackendPort"
+)
+if ($NoReload) {
+    $BackendCommandParts[1] += " -NoReload"
+}
+$BackendCommand = $BackendCommandParts -join "; "
 $BackendArgs = @(
     "-NoExit",
     "-ExecutionPolicy", "Bypass",
-    "-File", (Join-Path $ProjectRoot "start_web.ps1"),
-    "-HostName", $BackendHost,
-    "-Port", "$BackendPort"
+    "-Command", $BackendCommand
 )
-if ($NoReload) {
-    $BackendArgs += "-NoReload"
-}
 
 $FrontendCommand = @(
     "`$env:VITE_BACKEND_PROXY_TARGET = $(Quote-ForPowerShell "http://${BackendHost}:${BackendPort}")",
