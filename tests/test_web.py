@@ -33,6 +33,42 @@ class TestUploadAndProgress:
         assert "thread_id" in body
         assert len(body["thread_id"]) == 36  # uuid4
 
+    def test_upload_html_redirects_to_progress_page(self, monkeypatch):
+        monkeypatch.setattr(web, "_run_review", lambda *_args, **_kwargs: None)
+        r = client.post(
+            "/upload",
+            files={"file": ("test.txt", self.PAPER_TXT.encode("utf-8"), "text/plain")},
+            headers={"accept": "text/html"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"].startswith("/reviews/")
+        assert r.headers["location"].endswith("/progress")
+
+    def test_run_review_releases_checkpointer(self, monkeypatch):
+        class FakeCheckpointer:
+            def __init__(self):
+                self.released = False
+
+            def release(self):
+                self.released = True
+
+        class FakeGraph:
+            def __init__(self):
+                self.checkpointer = FakeCheckpointer()
+
+            def stream(self, _state, _config):
+                yield {"field_analyst": {}}
+
+        fake_graph = FakeGraph()
+
+        import paper_reviewer.graph as graph
+
+        monkeypatch.setattr(graph, "build_review_graph_with_checkpoint", lambda: fake_graph)
+        web._run_review("release-thread", self.PAPER_TXT, "test.txt")
+
+        assert fake_graph.checkpointer.released is True
+
 
 class TestResultAndRebuttal:
     def _upload_without_review(self, monkeypatch):
@@ -98,6 +134,27 @@ class TestResultAndRebuttal:
         assert web._task_status[tid]["round"] == 2
         assert web._task_status[tid]["finished"] is False
 
+    def test_submit_rebuttal_html_redirects_to_progress_page(self, monkeypatch):
+        class FakeGraph:
+            def stream(self, _inp, _config):
+                yield {"rebuttal_eic": {}}
+
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 1}, raising=False)
+
+        import paper_reviewer.graph as graph
+
+        monkeypatch.setattr(graph, "build_rebuttal_graph", lambda: FakeGraph())
+
+        r = client.post(
+            "/rebuttal/html-thread",
+            data={"target": "eic", "text": "作者回应"},
+            headers={"accept": "text/html"},
+            follow_redirects=False,
+        )
+
+        assert r.status_code == 303
+        assert r.headers["location"] == "/reviews/html-thread/progress"
+
     def test_submit_rebuttal_rejects_round3(self, monkeypatch):
         monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 2}, raising=False)
 
@@ -113,6 +170,13 @@ class TestResultAndRebuttal:
 
         assert r.status_code == 400
         assert "invalid target" in r.text
+
+    def test_submit_rebuttal_rejects_unknown_thread(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        r = client.post("/rebuttal/missing", data={"target": "eic", "text": "作者回应"})
+
+        assert r.status_code == 404
 
     def test_submit_rebuttal_rejects_in_progress_round2(self, monkeypatch):
         monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 1}, raising=False)
@@ -131,6 +195,11 @@ class TestTemplates:
         r = client.get("/progress/dummy-tid")
         assert r.status_code == 200
         assert "text/event-stream" in r.headers.get("content-type", "")
+
+    def test_progress_page_renders_sse_template(self):
+        r = client.get("/reviews/dummy-tid/progress")
+        assert r.status_code == 200
+        assert 'sse-connect="/progress/dummy-tid"' in r.text
 
     def test_progress_template_contains_htmx_sse(self):
         base = Path("paper_reviewer/templates/base.html").read_text(encoding="utf-8")

@@ -6,7 +6,7 @@ import os
 import uuid
 
 from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from paper_reviewer.checkpoint import get_thread_state, list_threads
@@ -20,6 +20,17 @@ app = FastAPI(title="AI 论文审稿系统")
 _paper_store: dict[str, str] = {}      # thread_id → 论文原文
 _task_status: dict[str, dict] = {}     # thread_id → {"done": [...], "current": "", "finished": bool, "error": str}
 VALID_REBUTTAL_TARGETS = {"eic", "methodology", "domain", "perspective", "devils_advocate", "all"}
+
+
+def _wants_html(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept
+
+
+def _release_graph_checkpointer(graph_app) -> None:
+    checkpointer = getattr(graph_app, "checkpointer", None)
+    if hasattr(checkpointer, "release"):
+        checkpointer.release()
 
 
 # ── 节点中文名（用于前端展示） ──
@@ -58,8 +69,9 @@ def _run_review(thread_id: str, paper_text: str, title: str) -> None:
     from paper_reviewer.graph import build_review_graph_with_checkpoint
     from paper_reviewer.state import ReviewState
 
+    graph_app = None
     try:
-        app = build_review_graph_with_checkpoint()
+        graph_app = build_review_graph_with_checkpoint()
         initial_state = ReviewState(
             paper=paper_text,
             paper_title=title,
@@ -86,23 +98,28 @@ def _run_review(thread_id: str, paper_text: str, title: str) -> None:
             rebuttal_history=[],
         )
         config = {"configurable": {"thread_id": thread_id}}
-        for chunk in app.stream(initial_state, config=config):
+        for chunk in graph_app.stream(initial_state, config=config):
             # chunk 是 {node_name: output_dict} 的字典
             for node_name in chunk:
                 _on_node_complete(thread_id, node_name)
         _task_status.setdefault(thread_id, {})["finished"] = True
     except Exception as e:  # 后台任务异常不能抛给客户端，需记录
         _task_status.setdefault(thread_id, {})["error"] = repr(e)
+    finally:
+        if graph_app is not None:
+            _release_graph_checkpointer(graph_app)
 
 
 @app.post("/upload")
-async def upload(file: UploadFile, background_tasks: BackgroundTasks):
+async def upload(request: Request, file: UploadFile, background_tasks: BackgroundTasks):
     """上传论文（.txt / .pdf），生成 thread_id，后台启动一审。"""
     raw = await file.read()
     text = raw.decode("utf-8") if file.filename.endswith(".txt") else _decode_pdf(raw)
     thread_id = str(uuid.uuid4())
     _paper_store[thread_id] = text
     background_tasks.add_task(_run_review, thread_id, text, file.filename)
+    if _wants_html(request):
+        return RedirectResponse(f"/reviews/{thread_id}/progress", status_code=303)
     return {"thread_id": thread_id}
 
 
@@ -155,6 +172,15 @@ async def history(request: Request):
     return templates.TemplateResponse(request, "history.html", context={"threads": threads})
 
 
+@app.get("/reviews/{thread_id}/progress", response_class=HTMLResponse)
+async def progress_page(request: Request, thread_id: str):
+    return templates.TemplateResponse(
+        request,
+        "progress.html",
+        context={"thread_id": thread_id},
+    )
+
+
 @app.get("/result/{thread_id}", response_class=HTMLResponse)
 async def result(request: Request, thread_id: str):
     st = _task_status.get(thread_id, {})
@@ -191,6 +217,7 @@ async def rebuttal_form(request: Request, thread_id: str):
 
 @app.post("/rebuttal/{thread_id}")
 async def submit_rebuttal(
+    request: Request,
     thread_id: str,
     background_tasks: BackgroundTasks,
     target: str = Form(...),
@@ -200,7 +227,9 @@ async def submit_rebuttal(
     if target not in VALID_REBUTTAL_TARGETS:
         raise HTTPException(status_code=400, detail="invalid target")
 
-    saved = get_thread_state(thread_id) or {}
+    saved = get_thread_state(thread_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="thread not found")
     if saved.get("round_number", 1) >= 2:
         raise HTTPException(status_code=400, detail="round limit reached")
 
@@ -230,6 +259,10 @@ async def submit_rebuttal(
             _task_status[thread_id]["round"] = next_round
         except Exception as e:
             _task_status.setdefault(thread_id, {})["error"] = repr(e)
+        finally:
+            _release_graph_checkpointer(graph_app)
 
     background_tasks.add_task(_run)
+    if _wants_html(request):
+        return RedirectResponse(f"/reviews/{thread_id}/progress", status_code=303)
     return {"status": "rebuttal_started", "round": next_round, "thread_id": thread_id}
