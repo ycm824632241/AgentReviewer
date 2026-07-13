@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchHistory, fetchResult, fetchRebuttalInfo, openProgressStream, submitRebuttal, uploadPaper } from "./api";
 import type { ProgressEvent, RebuttalInfoResponse, ReviewResultResponse, ReviewState } from "./types";
 
@@ -9,6 +9,11 @@ const reviewerReports: Array<[keyof ReviewState, string]> = [
   ["perspective_report", "跨学科视角"],
   ["devils_advocate_report", "Devil's Advocate"]
 ];
+
+type ActiveStream = {
+  threadId: string;
+  source: EventSource;
+};
 
 function renderValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "暂无";
@@ -27,6 +32,8 @@ export default function App() {
   const [rebuttalText, setRebuttalText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const activeStreamRef = useRef<ActiveStream | null>(null);
+  const selectedThreadRef = useRef("");
 
   const finished = events.some((event) => event.node === "__all__");
   const state = result?.state;
@@ -44,26 +51,77 @@ export default function App() {
 
   async function loadResult(id: string) {
     const data = await fetchResult(id);
+    if (selectedThreadRef.current !== id) return;
+
     setResult(data);
-    if (data.state) {
-      const info = await fetchRebuttalInfo(id).catch(() => null);
-      setRebuttalInfo(info);
+    setRebuttalInfo(null);
+    if (!data.state) return;
+
+    try {
+      const info = await fetchRebuttalInfo(id);
+      if (selectedThreadRef.current === id) {
+        setRebuttalInfo(info);
+      }
+    } catch (err) {
+      if (selectedThreadRef.current === id) {
+        setError(err instanceof Error ? err.message : "读取 Rebuttal 信息失败");
+      }
     }
   }
 
+  function isActiveStream(id: string, source: EventSource) {
+    const active = activeStreamRef.current;
+    return active?.threadId === id && active.source === source && selectedThreadRef.current === id;
+  }
+
+  function stopActiveStream(source?: EventSource) {
+    const active = activeStreamRef.current;
+    if (!active || (source && active.source !== source)) return;
+
+    active.source.close();
+    activeStreamRef.current = null;
+    setBusy(false);
+  }
+
   function listenProgress(id: string) {
-    const source = openProgressStream(id, async (event) => {
-      setEvents((prev) => [...prev, event]);
-      if (event.node === "__error__") {
-        setError(event.status);
-        source.close();
-      }
-      if (event.node === "__all__") {
-        source.close();
+    stopActiveStream();
+    setBusy(true);
+
+    const source = openProgressStream(id, (event) => {
+      void handleProgressEvent(id, source, event).catch((err) => {
+        if (!isActiveStream(id, source)) return;
+        setError(err instanceof Error ? err.message : "读取审稿进度失败");
+        stopActiveStream(source);
+      });
+    });
+    activeStreamRef.current = { threadId: id, source };
+    source.onerror = () => {
+      if (!isActiveStream(id, source)) return;
+      setError("审稿进度连接已中断");
+      stopActiveStream(source);
+    };
+  }
+
+  async function handleProgressEvent(id: string, source: EventSource, event: ProgressEvent) {
+    if (!isActiveStream(id, source)) return;
+
+    setEvents((prev) => [...prev, event]);
+    if (event.node === "__error__") {
+      setError(event.status);
+      stopActiveStream(source);
+      return;
+    }
+    if (event.node === "__all__") {
+      stopActiveStream(source);
+      try {
         await loadResult(id);
         await refreshHistory();
+      } catch (err) {
+        if (selectedThreadRef.current === id) {
+          setError(err instanceof Error ? err.message : "读取审稿结果失败");
+        }
       }
-    });
+    }
   }
 
   async function handleUpload() {
@@ -71,17 +129,25 @@ export default function App() {
       setError("请选择 .txt 或 .pdf 文件");
       return;
     }
+    stopActiveStream();
     setBusy(true);
     setError("");
     setEvents([]);
     setResult(null);
+    setRebuttalInfo(null);
+    selectedThreadRef.current = "";
+    setThreadId("");
     try {
       const data = await uploadPaper(file);
+      if (selectedThreadRef.current !== "") {
+        setBusy(false);
+        return;
+      }
+      selectedThreadRef.current = data.thread_id;
       setThreadId(data.thread_id);
       listenProgress(data.thread_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "上传失败");
-    } finally {
       setBusy(false);
     }
   }
@@ -91,29 +157,51 @@ export default function App() {
       setError("请填写 Rebuttal 内容");
       return;
     }
+    const id = threadId;
+    stopActiveStream();
     setBusy(true);
     setError("");
     setEvents([]);
     try {
-      await submitRebuttal(threadId, target, rebuttalText);
+      await submitRebuttal(id, target, rebuttalText);
+      if (selectedThreadRef.current !== id) {
+        setBusy(false);
+        return;
+      }
       setRebuttalText("");
-      listenProgress(threadId);
+      listenProgress(id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "提交失败");
-    } finally {
+      if (selectedThreadRef.current === id) {
+        setError(err instanceof Error ? err.message : "提交失败");
+      }
       setBusy(false);
     }
   }
 
   async function openHistory(id: string) {
+    stopActiveStream();
+    selectedThreadRef.current = id;
     setThreadId(id);
     setEvents([]);
     setError("");
-    await loadResult(id);
+    setResult(null);
+    setRebuttalInfo(null);
+    try {
+      await loadResult(id);
+    } catch (err) {
+      if (selectedThreadRef.current === id) {
+        setError(err instanceof Error ? err.message : "读取审稿结果失败");
+      }
+    }
   }
 
   useEffect(() => {
-    refreshHistory().catch(() => setHistory([]));
+    refreshHistory().catch((err) => setError(err instanceof Error ? err.message : "读取历史记录失败"));
+    return () => {
+      const active = activeStreamRef.current;
+      active?.source.close();
+      activeStreamRef.current = null;
+    };
   }, []);
 
   return (
@@ -133,7 +221,7 @@ export default function App() {
           <section className="panel">
             <h2>论文上传</h2>
             <div className="upload-row">
-              <input type="file" accept=".txt,.pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+              <input type="file" accept=".txt,.pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} disabled={busy} />
               <button onClick={handleUpload} disabled={busy}>{busy ? "处理中" : "开始审稿"}</button>
             </div>
             {threadId && <p className="muted">thread_id: {threadId}</p>}
@@ -175,13 +263,13 @@ export default function App() {
         <aside className="side-column">
           <section className="panel">
             <h2>Rebuttal</h2>
-            <select value={target} onChange={(event) => setTarget(event.target.value)} disabled={result?.locked}>
+            <select value={target} onChange={(event) => setTarget(event.target.value)} disabled={busy || result?.locked}>
               <option value="all">全部审稿人</option>
               {(rebuttalInfo?.reviewers ?? []).map((reviewer) => (
                 <option key={String(reviewer.role)} value={String(reviewer.role)}>{reviewer.name ?? reviewer.role}</option>
               ))}
             </select>
-            <textarea value={rebuttalText} onChange={(event) => setRebuttalText(event.target.value)} disabled={result?.locked} rows={8} />
+            <textarea value={rebuttalText} onChange={(event) => setRebuttalText(event.target.value)} disabled={busy || result?.locked} rows={8} />
             <button onClick={handleSubmitRebuttal} disabled={busy || !result || result.locked}>
               {result?.locked ? "二审已完成" : "提交 Rebuttal"}
             </button>
