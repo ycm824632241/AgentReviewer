@@ -4,7 +4,7 @@
 
 - Replaced the README Web section with the prescribed Vite development and FastAPI demo startup instructions.
 - Added a `frontend/dist/index.html` detection message to `start_web.ps1`, before its `-CheckOnly` early exit so the smoke test reports the active serving mode.
-- Ignored Vite/TypeScript generated build artifacts: `*.tsbuildinfo`, `frontend/vite.config.js`, and `frontend/vite.config.d.ts`.
+- Ignored Vite/TypeScript generated build artifacts: `frontend/*.tsbuildinfo`, `frontend/vite.config.js`, and `frontend/vite.config.d.ts`.
 
 ## Verification
 
@@ -26,3 +26,7 @@ Each verification command initially failed before execution because the Windows 
 
 - Scoped the TypeScript build-info ignore rule to `frontend/*.tsbuildinfo`.
 - `git check-ignore frontend/tsconfig.tsbuildinfo frontend/tsconfig.node.tsbuildinfo`: both paths ignored.
+
+## Re-Review Verification
+
+- Read the resulting `README.md` and this report to verify the two-terminal development instructions and `frontend/*.tsbuildinfo` summary are correct.

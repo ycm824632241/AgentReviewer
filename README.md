@@ -7,7 +7,14 @@ LangGraph 多审稿人论文审稿 demo，支持 CLI 审稿和 FastAPI Web 界�
 开发模式采用前后端分离：
 
 ```powershell
+## Terminal 1: backend
 .\start_web.ps1
+```
+
+In a second terminal:
+
+```powershell
+## Terminal 2: frontend
 cd frontend
 npm install
 npm run dev
