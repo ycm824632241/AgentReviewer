@@ -33,5 +33,26 @@ def test_home_brand_is_agent_reviewer_without_old_title():
 
     assert "AgentReviewer" in app
     assert "<title>AgentReviewer</title>" in index
+    assert 'rel="icon"' in index
+    assert "data:image/svg+xml" in index
     assert "AI 论文审稿控制台" not in app
     assert "<title>AI 论文审稿系统</title>" not in index
+
+
+def test_reviewer_reports_are_paginated_one_reviewer_per_page():
+    app = read_frontend("App.tsx")
+
+    assert "function ReviewerPager" in app
+    assert "reviewerPage" in app
+    assert "上一位" in app
+    assert "下一位" in app
+    assert "reviewerReports.map(([key, label])" not in app
+
+
+def test_editor_decision_shows_integrated_revision_issues():
+    app = read_frontend("App.tsx")
+
+    assert "function FinalIssueSummary" in app
+    assert "编辑综合修改问题" in app
+    assert "revision_roadmap" in app
+    assert "给作者的问题" not in app

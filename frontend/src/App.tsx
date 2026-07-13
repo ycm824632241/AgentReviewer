@@ -88,6 +88,23 @@ function TextList({ value }: { value: unknown }) {
   );
 }
 
+function FinalIssueSummary({ roadmap }: { roadmap: unknown }) {
+  if (!isRecord(roadmap)) return <p className="muted">暂无编辑综合修改问题。</p>;
+
+  const integratedIssues = getField(roadmap, ["integrated_paper_issues", "issues", "problems"]);
+  const fallbackIssues = Object.entries(roadmap)
+    .filter(([key]) => key !== "integrated_paper_issues")
+    .flatMap(([, value]) => asList(value));
+  const issues = asList(integratedIssues).length > 0 ? integratedIssues : fallbackIssues;
+
+  return (
+    <section className="final-issues">
+      <h3>编辑综合修改问题</h3>
+      <TextList value={issues} />
+    </section>
+  );
+}
+
 function ReportSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="report-section">
@@ -112,7 +129,6 @@ function ReportCard({ label, report }: { label: string; report: unknown }) {
   const scores = getField(report, ["dimension_scores", "scores"]);
   const strengths = getField(report, ["strengths"]);
   const weaknesses = getField(report, ["weaknesses", "issues"]);
-  const questions = getField(report, ["questions_for_author", "questions"]);
   const counterArgument = getField(report, ["strongest_counter_argument"]);
   const alternatives = getField(report, ["ignored_alternatives"]);
   const stakeholders = getField(report, ["missing_stakeholders"]);
@@ -141,10 +157,6 @@ function ReportCard({ label, report }: { label: string; report: unknown }) {
         <TextList value={weaknesses} />
       </ReportSection>
 
-      <ReportSection title="给作者的问题">
-        <TextList value={questions} />
-      </ReportSection>
-
       {Boolean(counterArgument || alternatives || stakeholders || premise) && (
         <ReportSection title="反向论证">
           {Boolean(counterArgument) && <p>{renderValue(counterArgument)}</p>}
@@ -157,6 +169,45 @@ function ReportCard({ label, report }: { label: string; report: unknown }) {
   );
 }
 
+function ReviewerPager({
+  page,
+  onPageChange,
+  state
+}: {
+  page: number;
+  onPageChange: (page: number) => void;
+  state?: ReviewState;
+}) {
+  const safePage = Math.min(Math.max(page, 0), reviewerReports.length - 1);
+  const [key, label] = reviewerReports[safePage];
+
+  return (
+    <section className="reviewer-pager">
+      <div className="pager-toolbar">
+        <button onClick={() => onPageChange(Math.max(0, safePage - 1))} disabled={safePage === 0}>
+          上一位
+        </button>
+        <span>{safePage + 1} / {reviewerReports.length}</span>
+        <button onClick={() => onPageChange(Math.min(reviewerReports.length - 1, safePage + 1))} disabled={safePage === reviewerReports.length - 1}>
+          下一位
+        </button>
+      </div>
+      <div className="pager-tabs" aria-label="审稿人分页">
+        {reviewerReports.map(([, reviewerLabel], index) => (
+          <button
+            className={index === safePage ? "active" : ""}
+            key={reviewerLabel}
+            onClick={() => onPageChange(index)}
+          >
+            {reviewerLabel}
+          </button>
+        ))}
+      </div>
+      <ReportCard label={label} report={state?.[key]} />
+    </section>
+  );
+}
+
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [threadId, setThreadId] = useState("");
@@ -166,6 +217,7 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [target, setTarget] = useState("all");
   const [rebuttalText, setRebuttalText] = useState("");
+  const [reviewerPage, setReviewerPage] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const activeStreamRef = useRef<ActiveStream | null>(null);
@@ -347,6 +399,10 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    setReviewerPage(0);
+  }, [result?.thread_id]);
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -388,15 +444,12 @@ export default function App() {
               <h2>编辑决定</h2>
               <p className="decision">{renderValue(state?.editorial_decision)}</p>
               <ScoreGrid scores={state?.dimension_scores} />
+              <FinalIssueSummary roadmap={state?.revision_roadmap} />
             </section>
           )}
 
           {result && (
-            <section className="report-grid">
-              {reviewerReports.map(([key, label]) => (
-                <ReportCard key={key} label={label} report={state?.[key]} />
-              ))}
-            </section>
+            <ReviewerPager page={reviewerPage} onPageChange={setReviewerPage} state={state ?? undefined} />
           )}
         </div>
 

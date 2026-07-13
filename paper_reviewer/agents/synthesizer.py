@@ -35,23 +35,27 @@ SYNTHESIZER_ROADMAP_SCHEMA = """
 输出为 JSON 格式:
 {{
   "revision_roadmap": {{
+    "integrated_paper_issues": [
+      {{"issue": "论文需要修改的问题", "why_it_matters": "为什么影响录用判断", "revision_direction": "整合后的修改方向"}}
+    ],
     "priority_1_structural": [
-      {{"item": "具体修订建议", "source": "DA/R1/R2", "effort": "3天"}}
+      {{"item": "具体修订建议", "effort": "3天"}}
     ],
     "priority_2_content": [
-      {{"item": "具体修订建议", "source": "R2/R3", "effort": "2天"}}
+      {{"item": "具体修订建议", "effort": "2天"}}
     ],
     "priority_3_formatting": [
-      {{"item": "具体修订建议", "source": "EIC", "effort": "1天"}}
+      {{"item": "具体修订建议", "effort": "1天"}}
     ]
   }}
 }}
 
 要求:
+- integrated_paper_issues 是编辑整合后的“论文需要修改的问题”，不要逐个审稿人罗列，3-6 项
 - P1 必须修改（影响核心结论的方法论或逻辑问题），3-5 项
 - P2 应当修改（补充内容但不改变结论），2-4 项
 - P3 建议修改（语言和格式问题），1-3 项
-- 每项附带 source（来源审稿人）和 effort（预计工时）
+- P1/P2/P3 每项附带 effort（预计工时），不需要逐条展示来源审稿人
 """
 
 
@@ -160,7 +164,7 @@ EIC 报告: {eic}
 审查问题清单:
 {weaknesses}
 
-要求: P1 回应 DA 的 CRITICAL 问题和核心方法论缺陷，P2 补充内容，P3 格式语言。"""),
+要求: 先整合分析，输出 integrated_paper_issues 作为论文层面的核心修改问题；不要逐个审稿人罗列。P1 回应 DA 的 CRITICAL 问题和核心方法论缺陷，P2 补充内容，P3 格式语言。"""),
     ])
 
     roadmap_inputs = {

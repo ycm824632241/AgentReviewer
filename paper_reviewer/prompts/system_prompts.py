@@ -83,4 +83,5 @@ SYNTHESIZER_SYSTEM = LANGUAGE_REQUIREMENT + """
 5. 构建修订路线图（P1/P2/P3 优先级清单）
 
 DA-CRITICAL 问题必须出现在最终决定中。
-综合编辑不能捏造意见——所有观点必须有 Phase 1 报告可追溯。"""
+综合编辑不能捏造意见——所有观点必须有 Phase 1 报告可追溯。
+必须进行整合分析，最终输出论文需要修改的问题；不要逐个审稿人罗列问题，也不要机械复述每位审稿人的 questions_for_author。"""
