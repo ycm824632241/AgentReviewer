@@ -15,18 +15,21 @@ import re
 import os
 from typing import List
 from dotenv import load_dotenv
+from paper_reviewer.config import get_env_path, get_env_value
 
 # 加载 .env
-env_path = os.path.join(os.path.dirname(__file__), "..", "..", "20-multi-agent-debate", ".env")
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=get_env_path())
 
 from openai import OpenAI
 
-_EMBED_MODEL = os.getenv("GITEE_EMBED_MODEL", "Qwen3-Embedding-4B")
+_EMBED_MODEL = get_env_value("EMBEDDING_MODEL", "GITEE_EMBED_MODEL", "Qwen3-Embedding-4B")
 _CHUNK_SIZE = 1000
 _CHUNK_OVERLAP = 150
 _TOP_K = 5        # 短论文的默认值
 _TOP_K_MAX = 20  # 长论文的上限（防止输入过多）
+_CHUNK_MAX_BYTES = 12 * 1024
+_EMBED_BATCH_MAX_ITEMS = 16
+_EMBED_BATCH_MAX_BYTES = 18 * 1024
 
 
 def _split_long_text(text: str, size: int, overlap: int) -> List[str]:
@@ -43,6 +46,37 @@ def _split_long_text(text: str, size: int, overlap: int) -> List[str]:
         if start + size >= len(text):
             break
     return chunks
+
+
+def _split_text_by_byte_limit(text: str, max_bytes: int) -> List[str]:
+    """Split text so every piece is within the UTF-8 byte limit."""
+    if len(text.encode("utf-8")) <= max_bytes:
+        return [text]
+
+    chunks = []
+    current = []
+    current_bytes = 0
+    for char in text:
+        char_bytes = len(char.encode("utf-8"))
+        if current and current_bytes + char_bytes > max_bytes:
+            chunks.append("".join(current))
+            current = []
+            current_bytes = 0
+        current.append(char)
+        current_bytes += char_bytes
+
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+def _enforce_chunk_limits(chunks: List[str], max_bytes: int = None) -> List[str]:
+    """Validate and split chunks again after natural-boundary chunking."""
+    max_bytes = max_bytes or _CHUNK_MAX_BYTES
+    bounded: List[str] = []
+    for chunk in chunks:
+        bounded.extend(_split_text_by_byte_limit(chunk, max_bytes))
+    return [chunk for chunk in bounded if chunk.strip()]
 
 
 def _select_fallback_chunks(chunks: List[str], limit: int) -> List[str]:
@@ -69,6 +103,43 @@ def _select_fallback_chunks(chunks: List[str], limit: int) -> List[str]:
         idx += 1
 
     return [chunks[i] for i in sorted(selected_indexes)]
+
+
+def _text_bytes(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _batch_texts(
+    texts: List[str],
+    max_items: int = None,
+    max_bytes: int = None,
+) -> List[List[str]]:
+    """Split embedding input into bounded batches while preserving order."""
+    max_items = max_items or _EMBED_BATCH_MAX_ITEMS
+    max_bytes = max_bytes or _EMBED_BATCH_MAX_BYTES
+    batches: List[List[str]] = []
+    current: List[str] = []
+    current_bytes = 0
+
+    bounded_texts: List[str] = []
+    for text in texts:
+        bounded_texts.extend(_split_text_by_byte_limit(text, max_bytes))
+
+    for text in bounded_texts:
+        text_bytes = _text_bytes(text)
+        would_exceed_items = len(current) >= max_items
+        would_exceed_bytes = current and current_bytes + text_bytes > max_bytes
+        if would_exceed_items or would_exceed_bytes:
+            batches.append(current)
+            current = []
+            current_bytes = 0
+
+        current.append(text)
+        current_bytes += text_bytes
+
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> List[str]:
@@ -122,7 +193,7 @@ def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLA
         else:
             merged.append(chunk)
 
-    return merged if merged else [text]
+    return _enforce_chunk_limits(merged if merged else [text])
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -138,22 +209,41 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
 def _embed(texts: List[str]) -> List[List[float]]:
     """批量获取 embedding 向量。"""
     client = OpenAI(
-        api_key=os.getenv("GITEE_API_KEY", ""),
-        base_url=os.getenv("GITEE_BASE_URL", "https://ai.gitee.com/v1"),
+        api_key=get_env_value("EMBEDDING_API_KEY", "GITEE_API_KEY", "") or "",
+        base_url=get_env_value("EMBEDDING_BASE_URL", "GITEE_BASE_URL", "https://ai.gitee.com/v1"),
     )
-    model = os.getenv("GITEE_EMBED_MODEL", _EMBED_MODEL)
-    resp = client.embeddings.create(model=model, input=texts)
-    return [item.embedding for item in resp.data]
+    model = get_env_value("EMBEDDING_MODEL", "GITEE_EMBED_MODEL", _EMBED_MODEL)
+    embeddings: List[List[float]] = []
+    for batch in _batch_texts(texts):
+        resp = client.embeddings.create(model=model, input=batch)
+        embeddings.extend(item.embedding for item in resp.data)
+    return embeddings
 
 
 class PaperIndex:
     """论文向量索引：分块 + embedding + 语义检索。"""
 
     def __init__(self, paper_text: str):
-        self.chunks = _chunk_text(paper_text)
+        self.chunks = _chunk_text(paper_text, size=_CHUNK_SIZE, overlap=_CHUNK_OVERLAP)
         self.embeddings = None
+        self.diagnostics = {
+            "paper_chars": len(paper_text),
+            "paper_bytes": _text_bytes(paper_text),
+            "chunk_count": len(self.chunks),
+            "chunk_size": _CHUNK_SIZE,
+            "chunk_overlap": _CHUNK_OVERLAP,
+            "chunk_max_bytes": _CHUNK_MAX_BYTES,
+            "max_chunk_bytes": max((_text_bytes(chunk) for chunk in self.chunks), default=0),
+            "embedding_batches": 0,
+            "chunk_embedding_status": "skipped_single_chunk",
+            "query_embedding_failures": 0,
+            "fallback_used": False,
+            "last_error": None,
+        }
         if len(self.chunks) > 1:
+            self.diagnostics["embedding_batches"] = len(_batch_texts(self.chunks))
             self.embeddings = _embed(self.chunks)
+            self.diagnostics["chunk_embedding_status"] = "success"
 
     def retrieve(self, query: str, top_k: int = _TOP_K) -> str:
         """根据查询检索最相关的论文块。
@@ -174,7 +264,10 @@ class PaperIndex:
         # 获取查询的 embedding。若外部 embedding API 暂时拒绝短查询，保留可用上下文。
         try:
             query_emb = _embed([query])[0]
-        except Exception:
+        except Exception as exc:
+            self.diagnostics["query_embedding_failures"] += 1
+            self.diagnostics["fallback_used"] = True
+            self.diagnostics["last_error"] = repr(exc)
             return "\n\n---\n\n".join(_select_fallback_chunks(self.chunks, actual_k))
 
         # 计算与每个 chunk 的相似度

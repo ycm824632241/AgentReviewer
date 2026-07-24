@@ -2,6 +2,21 @@
 
 LangGraph 多审稿人论文审稿 demo，支持 CLI 审稿和 FastAPI Web 界面。Web 流程使用 SQLite checkpointer 保存审稿状态，并支持作者 Rebuttal 后继续二审。
 
+## 配置
+
+复制环境变量示例，并填写 LLM 与 Embedding API 配置：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+需要配置的核心变量：
+
+- `REVIEW_LLM_BASE_URL` / `REVIEW_LLM_API_KEY` / `REVIEW_LLM_MODEL`：审稿 LLM
+- `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL`：RAG Embedding 模型
+
+变量名保持 provider-neutral：可以接入任意 OpenAI-compatible Chat / Embedding API。
+
 ## Web 界面
 
 推荐使用一键开发启动脚本。它会分别启动 FastAPI 后端和 Vite 前端：

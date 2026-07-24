@@ -1,4 +1,3 @@
-import hashlib
 from typing import List
 
 from langgraph.graph import StateGraph, END
@@ -13,24 +12,18 @@ from paper_reviewer.agents.devils_advocate import devils_advocate_node
 from paper_reviewer.agents.synthesizer import synthesizer_node
 from paper_reviewer.agents.rebuttal_reviewer import build_rebuttal_report_node
 from paper_reviewer.utils import with_retry
-
-_RAG_INDEX_CACHE = {}
+from paper_reviewer.rag.index_cache import (
+    _RAG_DIAGNOSTICS_CACHE,
+    _RAG_INDEX_CACHE,
+    clear_rag_cache,
+    get_rag_diagnostics,
+    get_rag_index_for_paper,
+)
 
 
 def _get_rag_index(state: dict):
     """Build a process-local RAG index without storing it in checkpoint state."""
-    paper = state.get("paper", "")
-    if len(paper) <= 3000:
-        return None
-
-    cache_key = hashlib.sha256(paper.encode("utf-8")).hexdigest()
-    if cache_key not in _RAG_INDEX_CACHE:
-        try:
-            from paper_reviewer.rag.retriever import PaperIndex
-            _RAG_INDEX_CACHE[cache_key] = PaperIndex(paper)
-        except Exception:
-            _RAG_INDEX_CACHE[cache_key] = None
-    return _RAG_INDEX_CACHE[cache_key]
+    return get_rag_index_for_paper(state.get("paper", ""))
 
 
 def _make_reviewer_lambda(node_fn):

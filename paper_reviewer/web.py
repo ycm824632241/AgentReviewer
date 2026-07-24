@@ -11,12 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from paper_reviewer.checkpoint import get_thread_state, list_threads
+from paper_reviewer.config import get_env_path
 
 BASE_DIR = os.path.dirname(__file__)
 PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
 FRONTEND_DIST = os.path.join(PROJECT_ROOT, "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
-SETTINGS_ENV_PATH = os.path.join(PROJECT_ROOT, "20-multi-agent-debate", ".env")
+SETTINGS_ENV_PATH = get_env_path()
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
 app = FastAPI(title="AgentReviewer")
@@ -40,6 +41,18 @@ REVIEWER_ROLE_TARGETS = {
 
 SETTINGS_KEYS = {
     "llm": {
+        "base_url": "REVIEW_LLM_BASE_URL",
+        "api_key": "REVIEW_LLM_API_KEY",
+        "model": "REVIEW_LLM_MODEL",
+    },
+    "embedding": {
+        "base_url": "EMBEDDING_BASE_URL",
+        "api_key": "EMBEDDING_API_KEY",
+        "model": "EMBEDDING_MODEL",
+    },
+}
+LEGACY_SETTINGS_KEYS = {
+    "llm": {
         "base_url": "MIMO_BASE_URL",
         "api_key": "MIMO_API_KEY",
         "model": "MIMO_MODEL_DEBATER",
@@ -51,10 +64,10 @@ SETTINGS_KEYS = {
     },
 }
 SETTINGS_DEFAULTS = {
-    "MIMO_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
-    "MIMO_MODEL_DEBATER": "mimo-v2.5-pro",
-    "GITEE_BASE_URL": "https://ai.gitee.com/v1",
-    "GITEE_EMBED_MODEL": "Qwen3-Embedding-4B",
+    "REVIEW_LLM_BASE_URL": "https://token-plan-cn.xiaomimimo.com/v1",
+    "REVIEW_LLM_MODEL": "mimo-v2.5-pro",
+    "EMBEDDING_BASE_URL": "https://ai.gitee.com/v1",
+    "EMBEDDING_MODEL": "Qwen3-Embedding-4B",
 }
 
 
@@ -95,12 +108,19 @@ def _mask_secret(value: str) -> str:
 def _settings_payload(values: dict[str, str]) -> dict:
     payload = {}
     for group, keys in SETTINGS_KEYS.items():
-        api_key = values.get(keys["api_key"], "")
+        legacy_keys = LEGACY_SETTINGS_KEYS.get(group, {})
+        api_key = values.get(keys["api_key"], values.get(legacy_keys.get("api_key", ""), ""))
         payload[group] = {
-            "base_url": values.get(keys["base_url"], SETTINGS_DEFAULTS.get(keys["base_url"], "")),
+            "base_url": values.get(
+                keys["base_url"],
+                values.get(legacy_keys.get("base_url", ""), SETTINGS_DEFAULTS.get(keys["base_url"], "")),
+            ),
             "api_key": _mask_secret(api_key),
             "api_key_set": bool(api_key),
-            "model": values.get(keys["model"], SETTINGS_DEFAULTS.get(keys["model"], "")),
+            "model": values.get(
+                keys["model"],
+                values.get(legacy_keys.get("model", ""), SETTINGS_DEFAULTS.get(keys["model"], "")),
+            ),
         }
     return payload
 
@@ -149,6 +169,19 @@ def _settings_updates_from_payload(payload: dict) -> dict[str, str]:
                 continue
             updates[env_key] = value
     return updates
+
+
+def _embedding_settings_changed(updates: dict[str, str], previous: dict[str, str]) -> bool:
+    embedding_keys = set(SETTINGS_KEYS["embedding"].values())
+    for key in embedding_keys.intersection(updates):
+        legacy_key = {
+            value: LEGACY_SETTINGS_KEYS["embedding"][field]
+            for field, value in SETTINGS_KEYS["embedding"].items()
+        }.get(key)
+        previous_value = previous.get(key, previous.get(legacy_key, SETTINGS_DEFAULTS.get(key, "")))
+        if updates[key] != previous_value:
+            return True
+    return False
 
 
 # ── 节点中文名（用于前端展示） ──
@@ -256,6 +289,11 @@ def _decode_pdf(raw: bytes) -> str:
 def _result_payload(thread_id: str, saved: dict | None) -> dict:
     st = _task_status.get(thread_id, {})
     round_number = saved.get("round_number", 1) if saved else 1
+    paper = (saved or {}).get("paper") or _paper_store.get(thread_id, "")
+    rag_diagnostics = None
+    if paper:
+        from paper_reviewer.graph import get_rag_diagnostics
+        rag_diagnostics = get_rag_diagnostics(paper)
     return {
         "thread_id": thread_id,
         "state": saved,
@@ -265,6 +303,7 @@ def _result_payload(thread_id: str, saved: dict | None) -> dict:
             else st
         ),
         "locked": round_number >= 2,
+        "rag_diagnostics": rag_diagnostics,
     }
 
 
@@ -396,9 +435,13 @@ async def api_settings():
 @app.post("/api/settings")
 async def api_update_settings(payload: dict):
     updates = _settings_updates_from_payload(payload)
+    previous = _read_env_file()
     _write_env_updates(updates)
     for key, value in updates.items():
         os.environ[key] = value
+    if _embedding_settings_changed(updates, previous):
+        from paper_reviewer.graph import clear_rag_cache
+        clear_rag_cache()
     return _settings_payload(_read_env_file())
 
 
@@ -437,6 +480,7 @@ async def result(request: Request, thread_id: str):
             "state": saved,
             "progress": st,
             "locked": round_number >= 2,
+            "rag_diagnostics": _result_payload(thread_id, saved).get("rag_diagnostics"),
         },
     )
 

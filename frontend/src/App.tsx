@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchHistory, fetchResult, fetchRebuttalInfo, fetchSettings, openProgressStream, saveSettings, submitRebuttal, uploadPaper } from "./api";
-import type { HistoryItem, ProgressEvent, RebuttalInfoResponse, ReviewResultResponse, ReviewState, SettingsPayload, SettingsUpdate } from "./types";
+import type { HistoryItem, ProgressEvent, RagDiagnostics, RebuttalInfoResponse, ReviewResultResponse, ReviewState, SettingsPayload, SettingsUpdate } from "./types";
 
 const reviewerReports: Array<[keyof ReviewState, string]> = [
   ["eic_report", "Editor-in-Chief"],
@@ -232,6 +232,55 @@ function ReviewerPager({
   );
 }
 
+function ragStatusLabel(status?: string): string {
+  if (status === "success") return "全文索引已完成";
+  if (status === "failed") return "全文索引失败";
+  if (status === "not_built") return "尚未建立索引";
+  if (status === "skipped_single_chunk") return "单块文本，无需向量检索";
+  return "等待索引状态";
+}
+
+function RagDiagnosticsPanel({ diagnostics }: { diagnostics?: RagDiagnostics | null }) {
+  if (!diagnostics) return null;
+
+  const rows = diagnostics.enabled === false
+    ? [
+        ["全文字符", renderValue(diagnostics.paper_chars)],
+        ["RAG 状态", diagnostics.reason === "paper_too_short" ? "论文较短，未启用向量检索" : "未启用"]
+      ]
+    : [
+        ["全文字符", renderValue(diagnostics.paper_chars)],
+        ["分块数量", renderValue(diagnostics.chunk_count)],
+        ["分块参数", `${renderValue(diagnostics.chunk_size)} 字 / overlap ${renderValue(diagnostics.chunk_overlap)}`],
+        ["最大分块", `${renderValue(diagnostics.max_chunk_bytes)} / ${renderValue(diagnostics.chunk_max_bytes)} bytes`],
+        ["Embedding 批次", renderValue(diagnostics.embedding_batches)],
+        ["RAG 状态", ragStatusLabel(diagnostics.chunk_embedding_status)],
+        ["查询降级", diagnostics.fallback_used ? `已触发 ${renderValue(diagnostics.query_embedding_failures)} 次` : "未触发"],
+        ["缓存命中", diagnostics.cache_hit ? "是" : "否"]
+      ];
+
+  return (
+    <section className="panel rag-diagnostics">
+      <div className="panel-heading">
+        <div>
+          <h2>RAG 状态</h2>
+          <p className="muted">用于确认论文是否完成分块索引，以及审稿检索是否退回到均匀抽样。</p>
+        </div>
+        <span className="status-pill">{diagnostics.enabled === false ? "未启用" : ragStatusLabel(diagnostics.chunk_embedding_status)}</span>
+      </div>
+      <dl>
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {diagnostics.last_error && <p className="muted">最近错误：{diagnostics.last_error}</p>}
+    </section>
+  );
+}
+
 function SettingsField({
   label,
   envName,
@@ -289,13 +338,13 @@ function SettingsPanel({
           <h3>审稿 LLM</h3>
           <SettingsField
             label="API Base URL"
-            envName="MIMO_BASE_URL"
+            envName="REVIEW_LLM_BASE_URL"
             value={form.llm.base_url}
             onChange={(value) => onFieldChange("llm", "base_url", value)}
           />
           <SettingsField
             label="API Key"
-            envName="MIMO_API_KEY"
+            envName="REVIEW_LLM_API_KEY"
             type="password"
             value={form.llm.api_key}
             placeholder={llmKeyPlaceholder}
@@ -303,7 +352,7 @@ function SettingsPanel({
           />
           <SettingsField
             label="模型名称"
-            envName="MIMO_MODEL_DEBATER"
+            envName="REVIEW_LLM_MODEL"
             value={form.llm.model}
             onChange={(value) => onFieldChange("llm", "model", value)}
           />
@@ -313,13 +362,13 @@ function SettingsPanel({
           <h3>Embedding 模型</h3>
           <SettingsField
             label="Embedding API Base URL"
-            envName="GITEE_BASE_URL"
+            envName="EMBEDDING_BASE_URL"
             value={form.embedding.base_url}
             onChange={(value) => onFieldChange("embedding", "base_url", value)}
           />
           <SettingsField
             label="Embedding API Key"
-            envName="GITEE_API_KEY"
+            envName="EMBEDDING_API_KEY"
             type="password"
             value={form.embedding.api_key}
             placeholder={embeddingKeyPlaceholder}
@@ -327,7 +376,7 @@ function SettingsPanel({
           />
           <SettingsField
             label="Embedding 模型名称"
-            envName="GITEE_EMBED_MODEL"
+            envName="EMBEDDING_MODEL"
             value={form.embedding.model}
             onChange={(value) => onFieldChange("embedding", "model", value)}
           />
@@ -639,6 +688,8 @@ export default function App() {
             </ol>
             {events.length === 0 && <p className="muted">上传论文后将显示实时节点进度。</p>}
           </section>
+
+          {result && <RagDiagnosticsPanel diagnostics={result.rag_diagnostics} />}
 
           {result && (
             <section className="panel">

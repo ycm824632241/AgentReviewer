@@ -3,6 +3,7 @@ import json
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from paper_reviewer.config import get_env_path, get_env_value
 
 
 def _extract_json(text: str) -> str:
@@ -179,12 +180,11 @@ def with_retry(node_fn, max_retries: int = 2):
 
 
 def get_llm(temperature=0.3, max_tokens=4096):
-    env_path = os.path.join(os.path.dirname(__file__), "..", "20-multi-agent-debate", ".env")
-    load_dotenv(dotenv_path=env_path)
+    load_dotenv(dotenv_path=get_env_path())
     return ChatOpenAI(
-        model=os.getenv("MIMO_MODEL_DEBATER", "mimo-v2.5-pro"),
-        api_key=os.getenv("MIMO_API_KEY"),
-        base_url=os.getenv("MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1"),
+        model=get_env_value("REVIEW_LLM_MODEL", "MIMO_MODEL_DEBATER", "mimo-v2.5-pro"),
+        api_key=get_env_value("REVIEW_LLM_API_KEY", "MIMO_API_KEY"),
+        base_url=get_env_value("REVIEW_LLM_BASE_URL", "MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1"),
         temperature=temperature,
         max_tokens=max_tokens,
     )

@@ -4,8 +4,11 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.env
 
 reviewer_memory.db
+reviewer_memory.db-*
+*.log
 
 frontend/node_modules/
 frontend/dist/

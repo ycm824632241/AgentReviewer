@@ -337,6 +337,32 @@ h3 {
   margin-bottom: 12px;
 }
 
+.rag-diagnostics dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 20px 0 0;
+}
+
+.rag-diagnostics dl div {
+  border: 1px solid #ededed;
+  border-radius: 18px;
+  padding: 13px 14px;
+  background: #fafafa;
+}
+
+.rag-diagnostics dt {
+  color: #666;
+  font-size: 12px;
+}
+
+.rag-diagnostics dd {
+  margin: 5px 0 0;
+  color: #111;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 .score-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -490,6 +516,10 @@ h3 {
   }
 
   .score-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rag-diagnostics dl {
     grid-template-columns: 1fr;
   }
 }

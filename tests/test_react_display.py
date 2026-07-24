@@ -81,13 +81,30 @@ def test_settings_page_exposes_llm_and_embedding_config():
     assert "function SettingsPanel" in app
     assert "审稿 LLM" in app
     assert "Embedding 模型" in app
-    assert "MIMO_BASE_URL" in app
-    assert "MIMO_MODEL_DEBATER" in app
-    assert "GITEE_BASE_URL" in app
-    assert "GITEE_EMBED_MODEL" in app
+    assert "REVIEW_LLM_BASE_URL" in app
+    assert "REVIEW_LLM_MODEL" in app
+    assert "EMBEDDING_BASE_URL" in app
+    assert "EMBEDDING_MODEL" in app
+    assert "MIMO_BASE_URL" not in app
+    assert "GITEE_BASE_URL" not in app
     assert "fetchSettings" in api
     assert "saveSettings" in api
     assert "type SettingsPayload" in types
+
+
+def test_review_workspace_shows_rag_embedding_diagnostics():
+    app = read_frontend("App.tsx")
+    types = read_frontend("types.ts")
+    css = read_frontend("styles.css")
+
+    assert "type RagDiagnostics" in types
+    assert "rag_diagnostics" in types
+    assert "function RagDiagnosticsPanel" in app
+    assert "RAG 状态" in app
+    assert "chunk_count" in app
+    assert "embedding_batches" in app
+    assert "chunk_embedding_status" in app
+    assert ".rag-diagnostics" in css
 
 
 def test_console_style_uses_reference_like_black_and_white_shell():

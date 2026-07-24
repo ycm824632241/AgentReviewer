@@ -31,6 +31,24 @@ export type ReviewState = {
   [key: string]: unknown;
 };
 
+export type RagDiagnostics = {
+  enabled?: boolean;
+  reason?: string;
+  paper_chars?: number;
+  paper_bytes?: number;
+  chunk_count?: number;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  chunk_max_bytes?: number;
+  max_chunk_bytes?: number;
+  embedding_batches?: number;
+  chunk_embedding_status?: string;
+  query_embedding_failures?: number;
+  fallback_used?: boolean;
+  cache_hit?: boolean;
+  last_error?: string | null;
+};
+
 export type ReviewResultResponse = {
   thread_id: string;
   state: ReviewState | null;
@@ -40,6 +58,7 @@ export type ReviewResultResponse = {
     [key: string]: unknown;
   };
   locked: boolean;
+  rag_diagnostics?: RagDiagnostics | null;
 };
 
 export type RebuttalInfoResponse = {

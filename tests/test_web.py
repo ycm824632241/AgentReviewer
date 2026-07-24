@@ -262,7 +262,7 @@ class TestApiEndpoints:
         monkeypatch.setattr(
             web,
             "get_thread_state",
-            lambda _thread_id: {"round_number": 2, "editorial_decision": "Accept"},
+            lambda _thread_id: {"round_number": 2, "editorial_decision": "Accept", "paper": "short"},
             raising=False,
         )
         web._task_status["api-result"] = {"done": ["synthesizer"], "finished": True}
@@ -272,9 +272,14 @@ class TestApiEndpoints:
         assert r.status_code == 200
         assert r.json() == {
             "thread_id": "api-result",
-            "state": {"round_number": 2, "editorial_decision": "Accept"},
+            "state": {"round_number": 2, "editorial_decision": "Accept", "paper": "short"},
             "progress": {"done": ["synthesizer"], "finished": True},
             "locked": True,
+            "rag_diagnostics": {
+                "enabled": False,
+                "paper_chars": 5,
+                "reason": "paper_too_short",
+            },
         }
 
     def test_api_result_marks_completed_checkpoint_finished_without_task_status(self, monkeypatch):
@@ -418,12 +423,12 @@ class TestApiEndpoints:
         env_file.write_text(
             "\n".join(
                 [
-                    "MIMO_BASE_URL=https://llm.example/v1",
-                    "MIMO_API_KEY=llm-secret-key",
-                    "MIMO_MODEL_DEBATER=mimo-test",
-                    "GITEE_BASE_URL=https://embed.example/v1",
-                    "GITEE_API_KEY=embed-secret-key",
-                    "GITEE_EMBED_MODEL=embed-test",
+                    "REVIEW_LLM_BASE_URL=https://llm.example/v1",
+                    "REVIEW_LLM_API_KEY=llm-secret-key",
+                    "REVIEW_LLM_MODEL=chat-test",
+                    "EMBEDDING_BASE_URL=https://embed.example/v1",
+                    "EMBEDDING_API_KEY=embed-secret-key",
+                    "EMBEDDING_MODEL=embed-test",
                 ]
             ),
             encoding="utf-8",
@@ -438,7 +443,7 @@ class TestApiEndpoints:
                 "base_url": "https://llm.example/v1",
                 "api_key": "**********-key",
                 "api_key_set": True,
-                "model": "mimo-test",
+                "model": "chat-test",
             },
             "embedding": {
                 "base_url": "https://embed.example/v1",
@@ -451,7 +456,7 @@ class TestApiEndpoints:
     def test_api_settings_writes_supported_model_config(self, monkeypatch, tmp_path):
         env_file = tmp_path / ".env"
         env_file.write_text(
-            "UNRELATED=value\nMIMO_API_KEY=old-llm-key\nGITEE_API_KEY=old-embed-key\n",
+            "UNRELATED=value\nREVIEW_LLM_API_KEY=old-llm-key\nEMBEDDING_API_KEY=old-embed-key\n",
             encoding="utf-8",
         )
         monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
@@ -475,12 +480,71 @@ class TestApiEndpoints:
         assert r.status_code == 200
         text = env_file.read_text(encoding="utf-8")
         assert "UNRELATED=value" in text
-        assert "MIMO_BASE_URL=https://new-llm.example/v1" in text
-        assert "MIMO_API_KEY=new-llm-key" in text
-        assert "MIMO_MODEL_DEBATER=new-chat-model" in text
-        assert "GITEE_BASE_URL=https://new-embed.example/v1" in text
-        assert "GITEE_API_KEY=old-embed-key" in text
-        assert "GITEE_EMBED_MODEL=new-embed-model" in text
+        assert "REVIEW_LLM_BASE_URL=https://new-llm.example/v1" in text
+        assert "REVIEW_LLM_API_KEY=new-llm-key" in text
+        assert "REVIEW_LLM_MODEL=new-chat-model" in text
+        assert "EMBEDDING_BASE_URL=https://new-embed.example/v1" in text
+        assert "EMBEDDING_API_KEY=old-embed-key" in text
+        assert "EMBEDDING_MODEL=new-embed-model" in text
+
+    def test_api_settings_reads_legacy_provider_specific_config(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "MIMO_BASE_URL=https://legacy-llm.example/v1",
+                    "MIMO_API_KEY=legacy-llm-key",
+                    "MIMO_MODEL_DEBATER=legacy-chat-model",
+                    "GITEE_BASE_URL=https://legacy-embed.example/v1",
+                    "GITEE_API_KEY=legacy-embed-key",
+                    "GITEE_EMBED_MODEL=legacy-embed-model",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
+
+        r = client.get("/api/settings")
+
+        assert r.status_code == 200
+        assert r.json()["llm"]["base_url"] == "https://legacy-llm.example/v1"
+        assert r.json()["llm"]["model"] == "legacy-chat-model"
+        assert r.json()["embedding"]["base_url"] == "https://legacy-embed.example/v1"
+        assert r.json()["embedding"]["model"] == "legacy-embed-model"
+
+    def test_api_settings_clears_rag_cache_when_embedding_config_changes(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "EMBEDDING_BASE_URL=https://old-embed.example/v1",
+                    "EMBEDDING_API_KEY=old-embed-key",
+                    "EMBEDDING_MODEL=old-embed-model",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
+
+        import paper_reviewer.graph as graph
+
+        graph._RAG_INDEX_CACHE["cached-paper"] = object()
+        graph._RAG_DIAGNOSTICS_CACHE["cached-paper"] = {"chunk_embedding_status": "success"}
+
+        r = client.post(
+            "/api/settings",
+            json={
+                "embedding": {
+                    "base_url": "https://new-embed.example/v1",
+                    "api_key": "new-embed-key",
+                    "model": "new-embed-model",
+                },
+            },
+        )
+
+        assert r.status_code == 200
+        assert graph._RAG_INDEX_CACHE == {}
+        assert graph._RAG_DIAGNOSTICS_CACHE == {}
 
     def test_api_progress_endpoint_is_sse(self):
         web._task_status["api-progress"] = {"done": [], "finished": True}
