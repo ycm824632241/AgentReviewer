@@ -3,6 +3,13 @@ from paper_reviewer.rag import retriever
 from paper_reviewer.rag.retriever import PaperIndex, _chunk_text
 
 
+def _adjacent_overlap(left: str, right: str, maximum: int) -> int:
+    for amount in range(min(maximum, len(left), len(right)), 0, -1):
+        if left[-amount:] == right[:amount]:
+            return amount
+    return 0
+
+
 def test_reviewer_system_prompts_require_chinese_output():
     prompt_names = [
         "FIELD_ANALYST_SYSTEM",
@@ -26,6 +33,42 @@ def test_chunk_text_splits_single_oversized_paragraph():
 
     assert len(chunks) > 1
     assert max(len(chunk) for chunk in chunks) <= 550
+
+
+def test_chunk_text_preserves_complete_section_headings():
+    text = "\n".join(
+        [
+            "1 引言",
+            "研究背景。" * 240,
+            "2.3 Research Design",
+            "Method details. " * 240,
+            "第一章 结论",
+            "结论内容。" * 240,
+        ]
+    )
+
+    chunks = _chunk_text(text)
+    joined = "\n".join(chunks)
+
+    assert "1 引言" in joined
+    assert "2.3 Research Design" in joined
+    assert "第一章 结论" in joined
+    assert all(len(chunk) <= retriever._CHUNK_SIZE for chunk in chunks)
+
+
+def test_short_middle_payload_keeps_uniform_overlap():
+    size = 500
+    overlap = 50
+    text = "\n\n".join(["甲" * 450, "短段", "乙" * 450])
+
+    chunks = _chunk_text(text, size=size, overlap=overlap)
+    overlaps = [
+        _adjacent_overlap(left, right, overlap)
+        for left, right in zip(chunks, chunks[1:])
+    ]
+
+    assert len(chunks) == 3
+    assert all(overlap - 1 <= amount <= overlap for amount in overlaps)
 
 
 def test_default_chunk_size_keeps_context_without_giant_requests():
@@ -191,6 +234,26 @@ def test_paper_index_records_chunk_embedding_diagnostics(monkeypatch):
     assert index.diagnostics["chunk_overlap"] == 50
     assert index.diagnostics["embedding_batches"] >= 2
     assert index.diagnostics["chunk_embedding_status"] == "success"
+
+
+def test_paper_index_keeps_chunks_when_index_embedding_fails(monkeypatch):
+    monkeypatch.setattr(retriever, "_CHUNK_SIZE", 400)
+    monkeypatch.setattr(retriever, "_CHUNK_OVERLAP", 50)
+
+    def fail_embed(_texts):
+        raise RuntimeError("embedding offline")
+
+    monkeypatch.setattr(retriever, "_embed", fail_embed)
+
+    index = PaperIndex("段落内容。" * 900)
+    context = index.retrieve("研究方法", top_k=3)
+
+    assert index.chunks
+    assert index.embeddings is None
+    assert index.diagnostics["chunk_embedding_status"] == "failed"
+    assert index.diagnostics["last_error_type"] == "RuntimeError"
+    assert context
+    assert len(context.split("\n\n---\n\n")) <= index.diagnostics["last_actual_top_k"]
 
 
 def test_chunk_text_enforces_hard_byte_limit_after_splitting(monkeypatch):

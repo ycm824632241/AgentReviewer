@@ -13,9 +13,12 @@ RAG 检索模块 v2：真正的向量检索（Gitee AI Qwen3-Embedding-4B）。
 """
 import re
 import os
+import logging
 from typing import List
 from dotenv import load_dotenv
 from paper_reviewer.config import get_env_path, get_env_value
+
+logger = logging.getLogger(__name__)
 
 # 加载 .env
 load_dotenv(dotenv_path=get_env_path())
@@ -30,6 +33,15 @@ _TOP_K_MAX = 20  # 长论文的上限（防止输入过多）
 _CHUNK_MAX_BYTES = 12 * 1024
 _EMBED_BATCH_MAX_ITEMS = 16
 _EMBED_BATCH_MAX_BYTES = 18 * 1024
+_SECTION_START_RE = re.compile(
+    r"(?im)(?=^[ \t]*(?:"
+    r"第[一二三四五六七八九十百千零\d]+[章节篇部分][^\n]*"
+    r"|[一二三四五六七八九十]+[、.][^\n]*"
+    r"|\d+(?:\.\d+)*(?:[.、]|[ \t]+)[^\n]+"
+    r"|Section[ \t]+\d+(?:\.\d+)*[^\n]*"
+    r"|(?:Abstract|Introduction|Conclusion|摘要|引言|绪论|背景|方法|实验|结果|讨论|结论|总结|展望|致谢|参考文献)"
+    r")[ \t]*$)"
+)
 
 
 def _split_long_text(text: str, size: int, overlap: int) -> List[str]:
@@ -81,6 +93,8 @@ def _enforce_chunk_limits(chunks: List[str], max_bytes: int = None) -> List[str]
 
 def _select_fallback_chunks(chunks: List[str], limit: int) -> List[str]:
     """Select a deterministic spread of chunks when semantic retrieval is unavailable."""
+    if not chunks or limit <= 0:
+        return []
     if len(chunks) <= limit:
         return chunks
     if limit <= 1:
@@ -142,58 +156,90 @@ def _batch_texts(
     return batches
 
 
-def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> List[str]:
-    """按段落边界切块（优先在章节标题和段落间切分）。"""
-    # 支持中英文标题格式：1. Introduction / 一、引言 / 第一章 绪论 / 摘要 等
-    # 策略：匹配行首的章节编号或常见标题关键词
-    section_pattern = (
-        r"(?:^|\n)\s*"                          # 行首
-        r"(?:"
-        r"第?[一二三四五六七八九十百千零\d]+"    # 中文/阿拉伯数字
-        r"[章节篇节部分\.、\s]"                  # 分隔符（章、节、第、.、、、空格）
-        r"|Abstract|Introduction|Conclusion"    # 英文标题
-        r"|摘要|引言|绪论|背景|方法|实验|结果|讨论|结论|总结|展望|致谢|参考文献"  # 中文标题
-        r"|Section\s+\d+"                       # Section 格式
-        r")"
-    )
-    sections = re.split(section_pattern, text, flags=re.MULTILINE | re.IGNORECASE)
-    sections = [s.strip() for s in sections if s.strip()]
+def _split_sections(text: str) -> List[str]:
+    starts = [match.start() for match in _SECTION_START_RE.finditer(text)]
+    if not starts:
+        return [text]
+    if starts[0] != 0:
+        starts.insert(0, 0)
+    return [text[start:end].strip() for start, end in zip(starts, starts[1:] + [len(text)]) if text[start:end].strip()]
 
-    chunks = []
-    for section in sections:
-        if len(section) <= size:
-            chunks.append(section)
-        else:
-            paragraphs = re.split(r"\n\s*\n", section)
+
+def _hard_split(text: str, size: int) -> List[str]:
+    return [text[start:start + size].strip() for start in range(0, len(text), size) if text[start:start + size].strip()]
+
+
+def _split_to_size(text: str, size: int) -> List[str]:
+    """Prefer paragraph/sentence boundaries; always make progress on hostile input."""
+    text = text.strip()
+    if len(text) <= size:
+        return [text] if text else []
+
+    for pattern in (r"\n\s*\n", r"(?<=[。．！？!?])\s*|(?<=\.)\s+"):
+        parts = [part.strip() for part in re.split(pattern, text) if part and part.strip()]
+        if len(parts) >= 2 and max(map(len, parts)) < len(text):
+            output: List[str] = []
             current = ""
-            for para in paragraphs:
-                para = para.strip()
-                if not para:
-                    continue
-                if len(para) > size:
+            for part in parts:
+                if len(part) > size:
                     if current:
-                        chunks.append(current.strip())
+                        output.append(current)
                         current = ""
-                    chunks.extend(_split_long_text(para, size, overlap))
+                    output.extend(_split_to_size(part, size))
                     continue
-                if len(current) + len(para) <= size:
-                    current += para + "\n"
+                candidate = f"{current}\n\n{part}".strip() if current else part
+                if len(candidate) <= size:
+                    current = candidate
                 else:
-                    if current:
-                        chunks.append(current.strip())
-                    current = para + "\n"
+                    output.append(current)
+                    current = part
             if current:
-                chunks.append(current.strip())
+                output.append(current)
+            return output
+    return _hard_split(text, size)
 
-    # 合并过短的相邻 chunk
-    merged = []
-    for chunk in chunks:
-        if merged and len(merged[-1]) < size // 2:
-            merged[-1] += "\n" + chunk
-        else:
-            merged.append(chunk)
 
-    return _enforce_chunk_limits(merged if merged else [text])
+def _combine_pieces(pieces: List[str], size: int) -> List[str]:
+    output: List[str] = []
+    current = ""
+    for piece in pieces:
+        for bounded_piece in _split_to_size(piece, size):
+            candidate = f"{current}\n\n{bounded_piece}".strip() if current else bounded_piece
+            if len(candidate) <= size:
+                current = candidate
+            else:
+                if current:
+                    output.append(current)
+                current = bounded_piece
+    if current:
+        output.append(current)
+    return output
+
+
+def _apply_overlap(chunks: List[str], size: int, overlap: int) -> List[str]:
+    if not chunks:
+        return []
+    overlap = max(0, min(overlap, size - 1))
+    output = [chunks[0]]
+    for chunk in chunks[1:]:
+        previous = output[-1]
+        allowed = max(0, size - len(chunk))
+        prefix_length = min(overlap, allowed, len(previous))
+        prefix = previous[-prefix_length:] if prefix_length else ""
+        output.append(f"{prefix}{chunk}" if prefix else chunk)
+    return output
+
+
+def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> List[str]:
+    """按章节与自然边界切块，保留标题并在相邻块间提供受限重叠。"""
+    text = text.strip()
+    if not text:
+        return []
+    size = max(1, size)
+    payload_size = max(1, size - max(0, min(overlap, size - 1)))
+    pieces = [piece for section in _split_sections(text) for piece in _split_to_size(section, payload_size)]
+    chunks = _apply_overlap(_combine_pieces(pieces, payload_size), size, overlap)
+    return _enforce_chunk_limits(chunks)
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -239,20 +285,28 @@ class PaperIndex:
             "query_embedding_failures": 0,
             "fallback_used": False,
             "last_error": None,
+            "last_error_type": None,
+            "retrieval_status": "not_run",
+            "last_requested_top_k": None,
+            "last_actual_top_k": None,
         }
         if len(self.chunks) > 1:
             self.diagnostics["embedding_batches"] = len(_batch_texts(self.chunks))
-            self.embeddings = _embed(self.chunks)
-            self.diagnostics["chunk_embedding_status"] = "success"
+            try:
+                self.embeddings = _embed(self.chunks)
+                self.diagnostics["chunk_embedding_status"] = "success"
+            except Exception as exc:
+                self.diagnostics["chunk_embedding_status"] = "failed"
+                self.diagnostics["fallback_used"] = True
+                self.diagnostics["last_error"] = str(exc)
+                self.diagnostics["last_error_type"] = type(exc).__name__
+                logger.warning("Chunk embedding unavailable; using deterministic retrieval fallback: %s", exc)
 
     def retrieve(self, query: str, top_k: int = _TOP_K) -> str:
         """根据查询检索最相关的论文块。
 
         top_k 动态计算：论文越长取越多，但不超过 _TOP_K_MAX。
         """
-        if self.embeddings is None:
-            return "\n\n---\n\n".join(self.chunks)
-
         # 动态计算 top_k：论文越长取越多，有上限
         n_chunks = len(self.chunks)
         if n_chunks <= 6:
@@ -261,13 +315,32 @@ class PaperIndex:
             # 按比例增长，但不超过上限
             actual_k = min(max(top_k, n_chunks // 4), _TOP_K_MAX, n_chunks)
 
+        diagnostics = self.diagnostics
+        diagnostics.setdefault("query_embedding_failures", 0)
+        diagnostics.setdefault("fallback_used", False)
+        diagnostics.setdefault("last_error", None)
+        diagnostics.setdefault("last_error_type", None)
+        diagnostics["last_requested_top_k"] = top_k
+        diagnostics["last_actual_top_k"] = actual_k
+
+        if self.embeddings is None:
+            diagnostics["fallback_used"] = True
+            diagnostics["retrieval_status"] = (
+                "fallback_index_embedding_failed"
+                if diagnostics.get("chunk_embedding_status") == "failed"
+                else "fallback_no_embeddings"
+            )
+            return "\n\n---\n\n".join(_select_fallback_chunks(self.chunks, actual_k))
+
         # 获取查询的 embedding。若外部 embedding API 暂时拒绝短查询，保留可用上下文。
         try:
             query_emb = _embed([query])[0]
         except Exception as exc:
-            self.diagnostics["query_embedding_failures"] += 1
-            self.diagnostics["fallback_used"] = True
-            self.diagnostics["last_error"] = repr(exc)
+            diagnostics["query_embedding_failures"] += 1
+            diagnostics["fallback_used"] = True
+            diagnostics["last_error"] = str(exc)
+            diagnostics["last_error_type"] = type(exc).__name__
+            diagnostics["retrieval_status"] = "fallback_query_embedding_failed"
             return "\n\n---\n\n".join(_select_fallback_chunks(self.chunks, actual_k))
 
         # 计算与每个 chunk 的相似度
@@ -279,4 +352,5 @@ class PaperIndex:
 
         # 取 actual_k，按原文顺序拼接
         selected = sorted(scores[:actual_k], key=lambda x: x[0])
+        diagnostics["retrieval_status"] = "semantic_success"
         return "\n\n---\n\n".join(self.chunks[i] for i, _ in selected)
