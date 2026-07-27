@@ -353,7 +353,9 @@ class TestReactStaticHosting:
         assert r.headers["content-type"].startswith("application/json")
         assert r.json()["thread_id"] == "static-missing"
 
-    def test_unknown_route_without_dist_returns_404(self):
+    def test_unknown_route_without_dist_returns_404(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web, "FRONTEND_INDEX", str(tmp_path / "missing-index.html"), raising=False)
+
         r = client.get("/react-only-route")
 
         assert r.status_code == 404

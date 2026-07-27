@@ -12,12 +12,24 @@ from paper_reviewer.agents.devils_advocate import devils_advocate_node
 from paper_reviewer.agents.synthesizer import synthesizer_node
 from paper_reviewer.agents.rebuttal_reviewer import build_rebuttal_report_node
 from paper_reviewer.utils import with_retry
+from paper_reviewer.rag.index_cache import (
+    _RAG_DIAGNOSTICS_CACHE,
+    _RAG_INDEX_CACHE,
+    clear_rag_cache,
+    get_rag_diagnostics,
+    get_rag_index_for_paper,
+)
+
+
+def _get_rag_index(state: dict):
+    """Build a process-local RAG index without storing it in checkpoint state."""
+    return get_rag_index_for_paper(state.get("paper", ""))
 
 
 def _make_reviewer_lambda(node_fn):
-    """创建带 RAG 的审稿人 lambda，从 state 取 rag_index 并自带重试。"""
+    """创建带 RAG 的审稿人 lambda；索引只保存在进程内缓存，不进入 checkpoint。"""
     def node_with_rag(state):
-        rag_index = state.get("rag_index")
+        rag_index = state.get("rag_index") or _get_rag_index(state)
         return node_fn(state, rag_index)
     return with_retry(node_with_rag)
 

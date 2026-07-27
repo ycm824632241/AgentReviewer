@@ -82,7 +82,7 @@ def get_thread_state(thread_id: str, db_path: str = DEFAULT_DB) -> Optional[dict
 
 
 def list_threads(db_path: str = DEFAULT_DB) -> List[dict]:
-    """列出所有 thread 的 id。"""
+    """列出所有 thread 的 id 和论文标题。"""
     cp = get_checkpointer(db_path)
     try:
         seen = set()
@@ -92,7 +92,9 @@ def list_threads(db_path: str = DEFAULT_DB) -> List[dict]:
             if thread_id in seen:
                 continue
             seen.add(thread_id)
-            threads.append({"thread_id": thread_id})
+            state = tpl.checkpoint.get("channel_values", {}) if getattr(tpl, "checkpoint", None) else {}
+            title = (state.get("paper_title") or "").strip() or "未命名论文"
+            threads.append({"thread_id": thread_id, "title": title})
         return threads
     except Exception:
         return []

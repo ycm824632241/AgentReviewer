@@ -12,6 +12,14 @@ from paper_reviewer.rubrics import DIMENSIONS, calculate_weighted_score, score_t
 import json
 
 
+_DECISION_SEVERITY = {
+    "Accept": 0,
+    "Minor Revision": 1,
+    "Major Revision": 2,
+    "Reject": 3,
+}
+
+
 SYNTHESIZER_DECISION_SCHEMA = """
 输出为 JSON 格式（精简版，仅包含决定和分数）:
 {{
@@ -35,23 +43,27 @@ SYNTHESIZER_ROADMAP_SCHEMA = """
 输出为 JSON 格式:
 {{
   "revision_roadmap": {{
+    "integrated_paper_issues": [
+      {{"issue": "论文需要修改的问题", "why_it_matters": "为什么影响录用判断", "revision_direction": "整合后的修改方向"}}
+    ],
     "priority_1_structural": [
-      {{"item": "具体修订建议", "source": "DA/R1/R2", "effort": "3天"}}
+      {{"issue": "必须修改的问题", "revision_direction": "具体修订方向"}}
     ],
     "priority_2_content": [
-      {{"item": "具体修订建议", "source": "R2/R3", "effort": "2天"}}
+      {{"issue": "应当修改的问题", "revision_direction": "具体修订方向"}}
     ],
     "priority_3_formatting": [
-      {{"item": "具体修订建议", "source": "EIC", "effort": "1天"}}
+      {{"issue": "建议修改的问题", "revision_direction": "具体修订方向"}}
     ]
   }}
 }}
 
 要求:
+- integrated_paper_issues 是编辑整合后的“论文需要修改的问题”，不要逐个审稿人罗列，3-6 项
 - P1 必须修改（影响核心结论的方法论或逻辑问题），3-5 项
 - P2 应当修改（补充内容但不改变结论），2-4 项
 - P3 建议修改（语言和格式问题），1-3 项
-- 每项附带 source（来源审稿人）和 effort（预计工时）
+- P1/P2/P3 只输出问题和修改方向，不输出时间估计或来源审稿人
 """
 
 
@@ -79,6 +91,74 @@ def _extract_json_safe(content: str) -> dict:
         return _safe_json_loads(_extract_json(content))
     except (json.JSONDecodeError, ValueError, KeyError):
         raise
+
+
+def _normalize_decision(value: object) -> str:
+    """Normalize common English/Chinese recommendation labels."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if "reject" in text or "拒" in text:
+        return "Reject"
+    if "major" in text or "大修" in text:
+        return "Major Revision"
+    if "minor" in text or "小修" in text:
+        return "Minor Revision"
+    if "accept" in text or "接收" in text or "录用" in text:
+        return "Accept"
+    return ""
+
+
+def _get_da_critical_issues(da_report: dict) -> list:
+    """Support both top-level CRITICAL and issues.CRITICAL DA report shapes."""
+    critical = []
+    top_level = da_report.get("CRITICAL", [])
+    nested = da_report.get("issues", {}).get("CRITICAL", []) if isinstance(da_report.get("issues"), dict) else []
+    for value in (top_level, nested):
+        if isinstance(value, list):
+            critical.extend(value)
+        elif value:
+            critical.append(value)
+    return critical
+
+
+def _reviewer_recommendations(state: ReviewState) -> list[str]:
+    recommendations = []
+    for role_key in ["eic_report", "methodology_report", "domain_report", "perspective_report"]:
+        report = state.get(role_key, {})
+        if not isinstance(report, dict):
+            continue
+        normalized = _normalize_decision(report.get("recommendation") or report.get("decision"))
+        if normalized:
+            recommendations.append(normalized)
+    return recommendations
+
+
+def _append_rationale(decision_result: dict, note: str) -> None:
+    rationale = str(decision_result.get("decision_rationale", "")).strip()
+    decision_result["decision_rationale"] = f"{rationale} {note}".strip()
+
+
+def _align_decision_with_reviewer_consensus(decision_result: dict, state: ReviewState) -> dict:
+    """Keep the editor decision consistent with reviewer consensus and DA hard gates."""
+    aligned = dict(decision_result)
+    decision = _normalize_decision(aligned.get("editorial_decision")) or "Major Revision"
+    recommendations = _reviewer_recommendations(state)
+    has_da_critical = bool(_get_da_critical_issues(state.get("devils_advocate_report", {}) or {}))
+
+    if has_da_critical and decision == "Accept":
+        decision = "Minor Revision"
+        _append_rationale(aligned, "已根据 DA CRITICAL 问题将接收决定校准为至少小修。")
+
+    if recommendations and not has_da_critical:
+        all_accept_or_minor = all(_DECISION_SEVERITY[rec] <= _DECISION_SEVERITY["Minor Revision"] for rec in recommendations)
+        too_severe = _DECISION_SEVERITY[decision] > _DECISION_SEVERITY["Minor Revision"]
+        if all_accept_or_minor and too_severe:
+            decision = "Minor Revision"
+            _append_rationale(aligned, "多数审稿建议为 Accept/Minor，未发现 DA CRITICAL，因此最终决定校准为小修。")
+
+    aligned["editorial_decision"] = decision
+    return aligned
 
 
 def synthesizer_node(state: ReviewState) -> ReviewState:
@@ -133,6 +213,7 @@ EIC 报告: {eic}
             "consensus_summary": "综合失败",
             "devils_advocate_handling": "未知",
         }
+    decision_result = _align_decision_with_reviewer_consensus(decision_result, state)
 
     # === 调用 2: 修订路线图 ===
     # 提取所有弱点作为路线图输入
@@ -147,7 +228,7 @@ EIC 报告: {eic}
                 all_weaknesses.append(f"[{role}] {w}")
 
     # DA 的 CRITICAL
-    da_issues = state.get("devils_advocate_report", {}).get("CRITICAL", [])
+    da_issues = _get_da_critical_issues(state.get("devils_advocate_report", {}) or {})
     for issue in da_issues:
         all_weaknesses.append(f"[DA-CRITICAL] {issue.get('description', issue)}")
 
@@ -160,7 +241,7 @@ EIC 报告: {eic}
 审查问题清单:
 {weaknesses}
 
-要求: P1 回应 DA 的 CRITICAL 问题和核心方法论缺陷，P2 补充内容，P3 格式语言。"""),
+要求: 先整合分析，输出 integrated_paper_issues 作为论文层面的核心修改问题；不要逐个审稿人罗列。P1 回应 DA 的 CRITICAL 问题和核心方法论缺陷，P2 补充内容，P3 格式语言。"""),
     ])
 
     roadmap_inputs = {
@@ -189,4 +270,5 @@ EIC 报告: {eic}
         },
         "revision_roadmap": roadmap_result.get("revision_roadmap", {}),
         "dimension_scores": decision_result.get("final_scores", {}),
+        "synthesized_round": state.get("round_number", 1),
     }

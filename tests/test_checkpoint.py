@@ -64,5 +64,37 @@ class TestCheckpointer:
         fake = FakeCheckpointer()
         monkeypatch.setattr(checkpoint, "get_checkpointer", lambda _db_path: fake)
 
-        assert list_threads("ignored.db") == [{"thread_id": "t1"}, {"thread_id": "t2"}]
+        assert list_threads("ignored.db") == [
+            {"thread_id": "t1", "title": "未命名论文"},
+            {"thread_id": "t2", "title": "未命名论文"},
+        ]
+        assert fake.released is True
+
+    def test_list_threads_includes_paper_title_from_checkpoint(self, monkeypatch):
+        class FakeCheckpointer:
+            def __init__(self):
+                self.released = False
+
+            def list(self, _config):
+                return [
+                    SimpleNamespace(
+                        config={"configurable": {"thread_id": "t1"}},
+                        checkpoint={"channel_values": {"paper_title": "BlindPark.pdf"}},
+                    ),
+                    SimpleNamespace(
+                        config={"configurable": {"thread_id": "t2"}},
+                        checkpoint={"channel_values": {"paper_title": ""}},
+                    ),
+                ]
+
+            def release(self):
+                self.released = True
+
+        fake = FakeCheckpointer()
+        monkeypatch.setattr(checkpoint, "get_checkpointer", lambda _db_path: fake)
+
+        assert list_threads("ignored.db") == [
+            {"thread_id": "t1", "title": "BlindPark.pdf"},
+            {"thread_id": "t2", "title": "未命名论文"},
+        ]
         assert fake.released is True

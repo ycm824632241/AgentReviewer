@@ -48,27 +48,27 @@ FIELD_ANALYST_OUTPUT_SCHEMA = """
 
 def field_analyst_node(state: ReviewState) -> ReviewState:
     llm = get_llm()
-    # Field Analyst 也使用 RAG：先建索引，再检索相关段落
-    from paper_reviewer.rag.retriever import PaperIndex
+    # Field Analyst 也使用共享 RAG 索引，避免后续 reviewer 重复 embedding 全文。
+    from paper_reviewer.rag.index_cache import get_rag_index_for_paper
 
-    rag_index = None
     paper_text_for_analysis = state["paper"]
 
     if len(state["paper"]) > 3000:
         try:
-            rag_index = PaperIndex(state["paper"])
+            rag_index = get_rag_index_for_paper(state["paper"])
             # 检索更多段落：Field Analyst 需要充分了解论文全貌才能精准配置审稿团
             # 动态计算：论文越长检索越多，但控制总量避免 token 溢出
-            n_chunks = len(rag_index.chunks)
-            top_k = min(max(6, n_chunks // 4), 12)  # 6-12 块，动态
-            retrieved = rag_index.retrieve(
-                "research field discipline domain methodology theoretical framework contributions",
-                top_k=top_k
-            )
-            # 取论文前 2000 字（通常含标题、摘要、引言）+ 检索结果
-            paper_text_for_analysis = state["paper"][:2000] + "\n\n---\n\n" + retrieved
+            if rag_index is not None:
+                n_chunks = len(rag_index.chunks)
+                top_k = min(max(6, n_chunks // 4), 12)  # 6-12 块，动态
+                retrieved = rag_index.retrieve(
+                    "research field discipline domain methodology theoretical framework contributions",
+                    top_k=top_k
+                )
+                # 取论文前 2000 字（通常含标题、摘要、引言）+ 检索结果
+                paper_text_for_analysis = state["paper"][:2000] + "\n\n---\n\n" + retrieved
         except Exception:
-            rag_index = None  # embedding 失败时退化为全文
+            pass  # embedding 失败时退化为全文
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", FIELD_ANALYST_SYSTEM + "\n\n" + FIELD_ANALYST_OUTPUT_SCHEMA),
@@ -80,4 +80,4 @@ def field_analyst_node(state: ReviewState) -> ReviewState:
     ))
     import json
     analysis = _safe_json_loads(_extract_json(result.content))
-    return {**analysis, "rag_index": rag_index}
+    return analysis

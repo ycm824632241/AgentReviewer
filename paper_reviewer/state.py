@@ -57,6 +57,7 @@ class ReviewState(TypedDict):
     consensus_analysis: Optional[dict]
     dimension_scores: Optional[dict]
     revision_roadmap: Optional[dict]
+    synthesized_round: Optional[int]   # 生成当前综合结论的轮次
     # ── Rebuttal 环节新增字段 ──
     round_number: int                   # 当前轮次，1-based
     rebuttal_text: Optional[str]        # 作者申诉正文

@@ -40,9 +40,16 @@ if ($Install) {
 Write-Host "Checking runtime dependencies..."
 & $PythonExe @PythonArgs -c "import fastapi, uvicorn, langgraph; print('runtime dependencies ok')"
 
-$EnvPath = Join-Path $ProjectRoot "20-multi-agent-debate\.env"
+$EnvPath = Join-Path $ProjectRoot ".env"
 if (-not (Test-Path $EnvPath)) {
-    Write-Warning "20-multi-agent-debate\.env was not found. The Web UI can start, but real review jobs need LLM API settings."
+    Write-Warning ".env was not found. The Web UI can start, but real review jobs need LLM API settings."
+}
+
+$FrontendDist = Join-Path $ProjectRoot "frontend\dist\index.html"
+if (Test-Path $FrontendDist) {
+    Write-Host "React build detected. FastAPI will serve frontend/dist."
+} else {
+    Write-Host "React build not found. Use frontend npm run dev for the React UI during development."
 }
 
 if ($CheckOnly) {

@@ -1,4 +1,7 @@
 # tests/test_web.py
+import asyncio
+import json
+
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -238,3 +241,420 @@ class TestTemplates:
         assert 'name="text"' in tpl
         assert "role_to_target" in tpl
         assert "已用完" in tpl or "已达" in tpl
+
+
+class TestApiEndpoints:
+    PAPER_TXT = TestUploadAndProgress.PAPER_TXT
+
+    def test_api_upload_txt_returns_thread_id(self, monkeypatch):
+        monkeypatch.setattr(web, "_run_review", lambda *_args, **_kwargs: None)
+
+        r = client.post(
+            "/api/upload",
+            files={"file": ("api.txt", self.PAPER_TXT.encode("utf-8"), "text/plain")},
+        )
+
+        assert r.status_code == 200
+        assert set(r.json()) == {"thread_id"}
+        assert len(r.json()["thread_id"]) == 36
+
+    def test_api_result_returns_json_payload(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"round_number": 2, "editorial_decision": "Accept", "paper": "short"},
+            raising=False,
+        )
+        web._task_status["api-result"] = {"done": ["synthesizer"], "finished": True}
+
+        r = client.get("/api/result/api-result")
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "thread_id": "api-result",
+            "state": {"round_number": 2, "editorial_decision": "Accept", "paper": "short"},
+            "progress": {"done": ["synthesizer"], "finished": True},
+            "locked": True,
+            "rag_diagnostics": {
+                "enabled": False,
+                "paper_chars": 5,
+                "reason": "paper_too_short",
+            },
+        }
+
+    def test_api_result_marks_completed_checkpoint_finished_without_task_status(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"editorial_decision": "Accept"},
+            raising=False,
+        )
+
+        r = client.get("/api/result/checkpoint-completed-result")
+
+        assert r.status_code == 200
+        assert r.json()["progress"] == {"done": ["synthesizer"], "finished": True}
+
+    def test_api_result_keeps_legacy_completed_round_one_checkpoint_finished(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"round_number": 1, "editorial_decision": "Accept"},
+            raising=False,
+        )
+
+        r = client.get("/api/result/legacy-round-one")
+
+        assert r.status_code == 200
+        assert r.json()["progress"] == {"done": ["synthesizer"], "finished": True}
+
+    def test_api_result_does_not_complete_interrupted_round_two_checkpoint(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {
+                "round_number": 2,
+                "editorial_decision": "Accept",
+                "dimension_scores": {"weighted_total": 80},
+            },
+            raising=False,
+        )
+
+        r = client.get("/api/result/interrupted-round-two")
+
+        assert r.status_code == 200
+        assert r.json()["progress"] == {}
+
+    def test_api_result_rejects_unknown_thread(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        r = client.get("/api/result/unknown-result-thread")
+
+        assert r.status_code == 404
+        assert r.json()["detail"] == "thread not found"
+
+    def test_api_rebuttal_info_rejects_missing_thread(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        r = client.get("/api/rebuttal/missing")
+
+        assert r.status_code == 404
+        assert r.json()["detail"] == "thread not found"
+
+    def test_api_rebuttal_info_returns_reviewers(self, monkeypatch):
+        saved = {
+            "round_number": 1,
+            "reviewer_configs": [
+                {"role": "EIC", "identity": "主编"},
+                {"role": "Methodology", "identity": "方法论专家"},
+                {"role": "Domain", "identity": "领域专家"},
+                {"role": "Perspective", "identity": "跨学科专家"},
+                {"role": "DevilsAdvocate", "identity": "批判学者"},
+            ],
+        }
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: saved, raising=False)
+
+        r = client.get("/api/rebuttal/api-thread")
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "thread_id": "api-thread",
+            "reviewers": [
+                {"role": "EIC", "identity": "主编", "target": "eic"},
+                {"role": "Methodology", "identity": "方法论专家", "target": "methodology"},
+                {"role": "Domain", "identity": "领域专家", "target": "domain"},
+                {"role": "Perspective", "identity": "跨学科专家", "target": "perspective"},
+                {"role": "DevilsAdvocate", "identity": "批判学者", "target": "devils_advocate"},
+            ],
+            "round_number": 1,
+            "locked": False,
+        }
+
+    def test_api_submit_rebuttal_starts_round2(self, monkeypatch):
+        class FakeGraph:
+            def stream(self, _inp, _config):
+                yield {"rebuttal_eic": {}}
+
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 1}, raising=False)
+
+        import paper_reviewer.graph as graph
+
+        monkeypatch.setattr(graph, "build_rebuttal_graph", lambda: FakeGraph())
+
+        r = client.post("/api/rebuttal/api-thread", data={"target": "eic", "text": "作者回应"})
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "rebuttal_started", "round": 2, "thread_id": "api-thread"}
+
+    def test_api_submit_rebuttal_records_graph_build_error(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"round_number": 1}, raising=False)
+
+        import paper_reviewer.graph as graph
+
+        def raise_graph_build_error():
+            raise RuntimeError("graph build failed")
+
+        monkeypatch.setattr(graph, "build_rebuttal_graph", raise_graph_build_error)
+
+        r = client.post(
+            "/api/rebuttal/graph-build-error",
+            data={"target": "eic", "text": "作者回应"},
+        )
+
+        assert r.status_code == 200
+        assert "graph build failed" in web._task_status["graph-build-error"]["error"]
+
+        retry = client.post(
+            "/api/rebuttal/graph-build-error",
+            data={"target": "eic", "text": "再次回应"},
+        )
+        assert retry.status_code != 409
+
+    def test_api_history_returns_threads(self, monkeypatch):
+        monkeypatch.setattr(web, "list_threads", lambda: [{"thread_id": "a"}, {"thread_id": "b"}], raising=False)
+
+        r = client.get("/api/history")
+
+        assert r.status_code == 200
+        assert r.json() == {"threads": [{"thread_id": "a"}, {"thread_id": "b"}]}
+
+    def test_api_settings_reads_masked_model_config(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "REVIEW_LLM_BASE_URL=https://llm.example/v1",
+                    "REVIEW_LLM_API_KEY=llm-secret-key",
+                    "REVIEW_LLM_MODEL=chat-test",
+                    "EMBEDDING_BASE_URL=https://embed.example/v1",
+                    "EMBEDDING_API_KEY=embed-secret-key",
+                    "EMBEDDING_MODEL=embed-test",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
+
+        r = client.get("/api/settings")
+
+        assert r.status_code == 200
+        assert r.json() == {
+            "llm": {
+                "base_url": "https://llm.example/v1",
+                "api_key": "**********-key",
+                "api_key_set": True,
+                "model": "chat-test",
+            },
+            "embedding": {
+                "base_url": "https://embed.example/v1",
+                "api_key": "************-key",
+                "api_key_set": True,
+                "model": "embed-test",
+            },
+        }
+
+    def test_api_settings_writes_supported_model_config(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "UNRELATED=value\nREVIEW_LLM_API_KEY=old-llm-key\nEMBEDDING_API_KEY=old-embed-key\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
+
+        r = client.post(
+            "/api/settings",
+            json={
+                "llm": {
+                    "base_url": "https://new-llm.example/v1",
+                    "api_key": "new-llm-key",
+                    "model": "new-chat-model",
+                },
+                "embedding": {
+                    "base_url": "https://new-embed.example/v1",
+                    "api_key": "",
+                    "model": "new-embed-model",
+                },
+            },
+        )
+
+        assert r.status_code == 200
+        text = env_file.read_text(encoding="utf-8")
+        assert "UNRELATED=value" in text
+        assert "REVIEW_LLM_BASE_URL=https://new-llm.example/v1" in text
+        assert "REVIEW_LLM_API_KEY=new-llm-key" in text
+        assert "REVIEW_LLM_MODEL=new-chat-model" in text
+        assert "EMBEDDING_BASE_URL=https://new-embed.example/v1" in text
+        assert "EMBEDDING_API_KEY=old-embed-key" in text
+        assert "EMBEDDING_MODEL=new-embed-model" in text
+
+    def test_api_settings_reads_legacy_provider_specific_config(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "MIMO_BASE_URL=https://legacy-llm.example/v1",
+                    "MIMO_API_KEY=legacy-llm-key",
+                    "MIMO_MODEL_DEBATER=legacy-chat-model",
+                    "GITEE_BASE_URL=https://legacy-embed.example/v1",
+                    "GITEE_API_KEY=legacy-embed-key",
+                    "GITEE_EMBED_MODEL=legacy-embed-model",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
+
+        r = client.get("/api/settings")
+
+        assert r.status_code == 200
+        assert r.json()["llm"]["base_url"] == "https://legacy-llm.example/v1"
+        assert r.json()["llm"]["model"] == "legacy-chat-model"
+        assert r.json()["embedding"]["base_url"] == "https://legacy-embed.example/v1"
+        assert r.json()["embedding"]["model"] == "legacy-embed-model"
+
+    def test_api_settings_clears_rag_cache_when_embedding_config_changes(self, monkeypatch, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "EMBEDDING_BASE_URL=https://old-embed.example/v1",
+                    "EMBEDDING_API_KEY=old-embed-key",
+                    "EMBEDDING_MODEL=old-embed-model",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "SETTINGS_ENV_PATH", str(env_file), raising=False)
+
+        import paper_reviewer.graph as graph
+
+        graph._RAG_INDEX_CACHE["cached-paper"] = object()
+        graph._RAG_DIAGNOSTICS_CACHE["cached-paper"] = {"chunk_embedding_status": "success"}
+
+        r = client.post(
+            "/api/settings",
+            json={
+                "embedding": {
+                    "base_url": "https://new-embed.example/v1",
+                    "api_key": "new-embed-key",
+                    "model": "new-embed-model",
+                },
+            },
+        )
+
+        assert r.status_code == 200
+        assert graph._RAG_INDEX_CACHE == {}
+        assert graph._RAG_DIAGNOSTICS_CACHE == {}
+
+    def test_api_progress_endpoint_is_sse(self):
+        web._task_status["api-progress"] = {"done": [], "finished": True}
+
+        r = client.get("/api/progress/api-progress")
+
+        assert r.status_code == 200
+        assert "text/event-stream" in r.headers.get("content-type", "")
+
+    def test_api_progress_unknown_thread_emits_error_and_terminates(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        response = asyncio.run(web.api_progress("missing-progress-thread"))
+        event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
+
+        assert json.loads(event.removeprefix("data: ").strip()) == {
+            "node": "__error__",
+            "status": "thread not found",
+        }
+
+    def test_api_progress_completed_checkpoint_emits_finished_without_task_status(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {"dimension_scores": {"weighted_total": 80}},
+            raising=False,
+        )
+
+        response = asyncio.run(web.api_progress("checkpoint-completed-progress"))
+        event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
+
+        assert json.loads(event.removeprefix("data: ").strip()) == {
+            "node": "__all__",
+            "status": "finished",
+        }
+
+    def test_api_progress_interrupted_round_two_checkpoint_emits_inactive_error(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {
+                "round_number": 2,
+                "editorial_decision": "Accept",
+                "dimension_scores": {"weighted_total": 80},
+                "synthesized_round": 1,
+            },
+            raising=False,
+        )
+
+        response = asyncio.run(web.api_progress("interrupted-round-two-progress"))
+        event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
+
+        assert json.loads(event.removeprefix("data: ").strip()) == {
+            "node": "__error__",
+            "status": "thread is not active",
+        }
+
+    def test_api_progress_completed_round_two_checkpoint_emits_finished(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {
+                "round_number": 2,
+                "editorial_decision": "Accept",
+                "dimension_scores": {"weighted_total": 80},
+                "synthesized_round": 2,
+            },
+            raising=False,
+        )
+
+        response = asyncio.run(web.api_progress("completed-round-two-progress"))
+        event = asyncio.run(asyncio.wait_for(anext(response.body_iterator), timeout=0.1))
+
+        assert json.loads(event.removeprefix("data: ").strip()) == {
+            "node": "__all__",
+            "status": "finished",
+        }
+
+
+class TestReactStaticHosting:
+    def test_api_routes_are_not_spa_fallback(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        r = client.get("/api/result/static-missing")
+
+        assert r.status_code == 404
+        assert r.headers["content-type"].startswith("application/json")
+        assert r.json()["detail"] == "thread not found"
+
+    def test_root_serves_react_build_when_present(self, monkeypatch, tmp_path):
+        index = tmp_path / "index.html"
+        index.write_text("<main id=\"react-root\">React bundle</main>", encoding="utf-8")
+        monkeypatch.setattr(web, "FRONTEND_INDEX", str(index), raising=False)
+
+        r = client.get("/")
+
+        assert r.status_code == 200
+        assert "react-root" in r.text
+
+    def test_root_preserves_jinja_index_without_react_build(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web, "FRONTEND_INDEX", str(tmp_path / "missing-index.html"), raising=False)
+
+        r = client.get("/")
+
+        assert r.status_code == 200
+        assert "上传并开始审稿" in r.text
+
+    def test_unknown_route_without_dist_returns_404(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(web, "FRONTEND_INDEX", str(tmp_path / "missing-index.html"), raising=False)
+
+        r = client.get("/react-only-route")
+
+        assert r.status_code == 404
