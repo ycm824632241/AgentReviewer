@@ -129,6 +129,23 @@ function FinalIssueSummary({ roadmap }: { roadmap: unknown }) {
   );
 }
 
+function ScoringLogicDisclosure() {
+  return (
+    <details className="scoring-logic">
+      <summary className="scoring-logic-summary">
+        <span className="scoring-logic-title">评分逻辑说明</span>
+        <span className="scoring-logic-note">普通审稿人平衡评分｜DA 仅压力测试｜主编综合校准</span>
+      </summary>
+      <ul className="scoring-logic-list">
+        <li>普通审稿人：EIC、方法论、领域、跨学科会同时给出优点、问题、推荐决定和五维评分。</li>
+        <li>五维权重：原创性 20%、方法 25%、证据 25%、结构 15%、写作 15%。</li>
+        <li>Devil's Advocate：不打分，只做压力测试；CRITICAL 问题会影响最终决定。</li>
+        <li>主编综合：不是简单平均，而是综合 5 份报告后输出最终决定和 final scores，并做规则校准。</li>
+      </ul>
+    </details>
+  );
+}
+
 function ReportSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="report-section">
@@ -240,6 +257,18 @@ function ragStatusLabel(status?: string): string {
   return "等待索引状态";
 }
 
+function ragSummary(diagnostics: RagDiagnostics): string {
+  if (diagnostics.enabled === false) {
+    return diagnostics.reason === "paper_too_short" ? "论文较短，未启用向量检索" : "未启用";
+  }
+
+  const status = ragStatusLabel(diagnostics.chunk_embedding_status);
+  const chunkCount = diagnostics.chunk_count ? `${diagnostics.chunk_count} chunks` : "等待分块";
+  const cache = diagnostics.cache_hit ? "缓存命中" : "未命中缓存";
+  const fallback = diagnostics.fallback_used ? "查询已降级" : "查询未降级";
+  return `${status}｜${chunkCount}｜${cache}｜${fallback}`;
+}
+
 function RagDiagnosticsPanel({ diagnostics }: { diagnostics?: RagDiagnostics | null }) {
   if (!diagnostics) return null;
 
@@ -260,14 +289,12 @@ function RagDiagnosticsPanel({ diagnostics }: { diagnostics?: RagDiagnostics | n
       ];
 
   return (
-    <section className="panel rag-diagnostics">
-      <div className="panel-heading">
-        <div>
-          <h2>RAG 状态</h2>
-          <p className="muted">用于确认论文是否完成分块索引，以及审稿检索是否退回到均匀抽样。</p>
-        </div>
-        <span className="status-pill">{diagnostics.enabled === false ? "未启用" : ragStatusLabel(diagnostics.chunk_embedding_status)}</span>
-      </div>
+    <details className="rag-diagnostics">
+      <summary className="rag-diagnostics-summary">
+        <span className="rag-diagnostics-title">RAG 状态</span>
+        <span className="rag-diagnostics-note">{ragSummary(diagnostics)}</span>
+      </summary>
+      <p className="muted rag-diagnostics-description">用于确认论文是否完成分块索引，以及审稿检索是否退回到均匀抽样。</p>
       <dl>
         {rows.map(([label, value]) => (
           <div key={label}>
@@ -277,7 +304,7 @@ function RagDiagnosticsPanel({ diagnostics }: { diagnostics?: RagDiagnostics | n
         ))}
       </dl>
       {diagnostics.last_error && <p className="muted">最近错误：{diagnostics.last_error}</p>}
-    </section>
+    </details>
   );
 }
 
@@ -676,7 +703,7 @@ export default function App() {
             {threadId && <p className="muted">thread_id: {threadId}</p>}
           </section>
 
-          <section className="panel">
+          <section className="panel progress-panel">
             <h2>审稿进度</h2>
             <ol className="timeline">
               {events.filter((event) => !event.node.startsWith("__")).map((event, index) => (
@@ -687,12 +714,12 @@ export default function App() {
               ))}
             </ol>
             {events.length === 0 && <p className="muted">上传论文后将显示实时节点进度。</p>}
+            {result?.rag_diagnostics && <RagDiagnosticsPanel diagnostics={result.rag_diagnostics} />}
           </section>
-
-          {result && <RagDiagnosticsPanel diagnostics={result.rag_diagnostics} />}
 
           {result && (
             <section className="panel">
+              <ScoringLogicDisclosure />
               <h2>编辑决定</h2>
               <p className="decision">{renderValue(state?.editorial_decision)}</p>
               <ScoreGrid scores={state?.dimension_scores} />
