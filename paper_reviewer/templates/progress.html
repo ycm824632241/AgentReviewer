@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>审稿进度</h1>
+<p>Thread: {{ thread_id }}</p>
+<div hx-ext="sse" sse-connect="/progress/{{ thread_id }}">
+  <ul id="progress-list">
+    <li>等待开始...</li>
+  </ul>
+</div>
+<p><a href="/result/{{ thread_id }}">查看最新结果</a></p>
+<script>
+function appendProgressItem(text) {
+  const list = document.getElementById("progress-list");
+  const item = document.createElement("li");
+  item.appendChild(document.createTextNode(text));
+  list.appendChild(item);
+}
+document.body.addEventListener("htmx:sseMessage", function (event) {
+  if (!event.detail.data) return;
+  try {
+    const item = JSON.parse(event.detail.data);
+    if (item.node === "__all__") {
+      appendProgressItem("审稿完成");
+    } else if (item.node === "__error__") {
+      appendProgressItem("错误: " + item.status);
+    } else {
+      appendProgressItem((item.label || item.node) + " 完成");
+    }
+  } catch (_) {}
+});
+</script>
+{% endblock %}

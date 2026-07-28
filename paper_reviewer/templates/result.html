@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>审稿结果 —— {{ state.paper_title if state else thread_id }}</h1>
+<p>Thread: {{ thread_id }}</p>
+{% if progress and not progress.finished %}
+<p>正在处理</p>
+{% endif %}
+{% if state %}
+<h2>编辑决定：{{ state.editorial_decision or "正在生成..." }}</h2>
+{% if state.dimension_scores %}
+<h3>最终分数</h3>
+<table>
+  {% for name, score in state.dimension_scores.items() %}
+  <tr><td>{{ name }}</td><td>{{ score }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% for key in ["eic_report", "methodology_report", "domain_report", "perspective_report"] %}
+  {% set report = state[key] %}
+  {% if report %}
+  <section>
+    <h3>{{ report.reviewer_role or key }} —— 推荐：{{ report.recommendation }}</h3>
+    <p>置信度：{{ report.confidence }}/5 | 加权平均：{{ report.weighted_average }}</p>
+    <h4>优点</h4>
+    <ul>
+      {% for strength in report.strengths or [] %}
+      <li>{{ strength.title }}：{{ strength.description }}</li>
+      {% endfor %}
+    </ul>
+    <h4>缺点</h4>
+    <ul>
+      {% for weakness in report.weaknesses or [] %}
+      <li>{{ weakness.title }} [{{ weakness.severity }}]：{{ weakness.problem }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+{% endfor %}
+
+{% if state.devils_advocate_report %}
+<section>
+  <h3>魔鬼代言人挑战</h3>
+  <p>{{ state.devils_advocate_report.strongest_counter_argument }}</p>
+</section>
+{% endif %}
+
+{% if state.revision_roadmap %}
+<h3>修订路线图</h3>
+<pre>{{ state.revision_roadmap }}</pre>
+{% endif %}
+{% endif %}
+{% if not locked %}
+<p><a href="/rebuttal/{{ thread_id }}">进入 Rebuttal 环节</a></p>
+{% else %}
+<p>已达最大 Rebuttal 轮次（2 轮）。</p>
+{% endif %}
+<p><a href="/">返回首页</a></p>
+{% endblock %}
