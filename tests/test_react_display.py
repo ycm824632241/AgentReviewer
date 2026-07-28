@@ -62,6 +62,24 @@ def test_editor_decision_shows_integrated_revision_issues():
     assert "给作者的问题" not in app
 
 
+def test_editor_decision_starts_with_collapsed_scoring_logic_explanation():
+    app = read_frontend("App.tsx")
+    css = read_frontend("styles.css")
+
+    assert "function ScoringLogicDisclosure" in app
+    assert '<details className="scoring-logic">' in app
+    assert '<summary className="scoring-logic-summary">' in app
+    assert "评分逻辑说明" in app
+    assert "普通审稿人平衡评分｜DA 仅压力测试｜主编综合校准" in app
+    assert "原创性 20%" in app
+    assert "方法 25%" in app
+    assert "证据 25%" in app
+    assert "结构 15%" in app
+    assert "写作 15%" in app
+    assert app.index("<ScoringLogicDisclosure />") < app.index("<h2>编辑决定</h2>")
+    assert ".scoring-logic[open]" in css
+
+
 def test_console_navigation_keeps_rebuttal_inside_review_workspace():
     app = read_frontend("App.tsx")
 
@@ -105,6 +123,18 @@ def test_review_workspace_shows_rag_embedding_diagnostics():
     assert "embedding_batches" in app
     assert "chunk_embedding_status" in app
     assert ".rag-diagnostics" in css
+
+
+def test_rag_diagnostics_are_collapsed_inside_progress_panel():
+    app = read_frontend("App.tsx")
+    css = read_frontend("styles.css")
+
+    assert 'className="panel progress-panel"' in app
+    assert '<details className="rag-diagnostics">' in app
+    assert '<summary className="rag-diagnostics-summary">' in app
+    assert "{result?.rag_diagnostics && <RagDiagnosticsPanel diagnostics={result.rag_diagnostics} />}" in app
+    assert "{result && <RagDiagnosticsPanel diagnostics={result.rag_diagnostics} />}" not in app
+    assert ".rag-diagnostics[open]" in css
 
 
 def test_console_style_uses_reference_like_black_and_white_shell():
