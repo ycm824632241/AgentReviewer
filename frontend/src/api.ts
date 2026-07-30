@@ -22,6 +22,10 @@ export async function fetchRebuttalInfo(threadId: string): Promise<RebuttalInfoR
   return readJson(await fetch(`/api/rebuttal/${threadId}`), "读取 Rebuttal 信息");
 }
 
+export async function resumeReview(threadId: string): Promise<{ status: string; thread_id: string }> {
+  return readJson(await fetch(`/api/resume/${threadId}`, { method: "POST" }), "继续审稿");
+}
+
 export async function submitRebuttal(threadId: string, target: string, text: string): Promise<{ status: string; round: number; thread_id: string }> {
   const form = new FormData();
   form.append("target", target);

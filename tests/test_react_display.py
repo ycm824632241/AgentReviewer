@@ -170,6 +170,18 @@ def test_history_result_restores_progress_timeline_from_saved_done_nodes():
     assert "setEvents((prev) => prev.length > 0 ? prev : restoredEvents);" in app
 
 
+def test_frontend_exposes_continue_review_button():
+    app = read_frontend("App.tsx")
+    api = read_frontend("api.ts")
+    types = read_frontend("types.ts")
+
+    assert "resumeReview" in api
+    assert "can_resume" in types
+    assert "handleResumeReview" in app
+    assert "继续审稿" in app
+    assert "/api/resume/" in api
+
+
 def test_console_style_uses_reference_like_black_and_white_shell():
     css = read_frontend("styles.css")
 

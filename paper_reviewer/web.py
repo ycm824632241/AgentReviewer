@@ -10,7 +10,16 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from paper_reviewer.checkpoint import get_thread_state, list_threads
+from paper_reviewer.checkpoint import (
+    fail_review_job,
+    finish_review_job,
+    get_review_job,
+    get_thread_state,
+    list_review_jobs,
+    list_threads,
+    update_review_job_progress,
+    upsert_review_job,
+)
 from paper_reviewer.config import get_env_path
 
 BASE_DIR = os.path.dirname(__file__)
@@ -228,6 +237,90 @@ def _on_node_complete(thread_id: str, node_name: str) -> None:
     if node_name not in st["done"]:
         st["done"].append(node_name)
     st["current"] = node_name
+    update_review_job_progress(thread_id, node_name)
+
+
+def _is_active_task(thread_id: str) -> bool:
+    st = _task_status.get(thread_id)
+    return bool(st and not st.get("finished") and not st.get("error"))
+
+
+def _build_resume_graph(saved: dict):
+    from paper_reviewer.graph import build_rebuttal_graph, build_review_graph_with_checkpoint
+
+    if saved.get("round_number", 1) >= 2:
+        return build_rebuttal_graph()
+    return build_review_graph_with_checkpoint()
+
+
+def _checkpoint_next(thread_id: str, saved: dict) -> tuple:
+    graph_app = None
+    try:
+        graph_app = _build_resume_graph(saved)
+        snapshot = graph_app.get_state({"configurable": {"thread_id": thread_id}})
+        return tuple(getattr(snapshot, "next", ()) or ())
+    except Exception:
+        return ()
+    finally:
+        if graph_app is not None:
+            _release_graph_checkpointer(graph_app)
+
+
+def _status_from_checkpoint(thread_id: str, saved: dict | None, job: dict | None = None) -> dict:
+    job = job if job is not None else get_review_job(thread_id)
+    done = list((job or {}).get("done") or _completed_nodes_from_checkpoint(saved))
+    if _is_completed_review(saved) and "synthesizer" not in done:
+        done.append("synthesizer")
+
+    status = {}
+    if done:
+        status["done"] = done
+    if (job or {}).get("current"):
+        status["current"] = job["current"]
+    if _is_completed_review(saved):
+        status["finished"] = True
+    if job and job.get("error"):
+        status["error"] = job["error"]
+    if job and job.get("round_number"):
+        status["round"] = job["round_number"]
+    return status
+
+
+def _can_resume(thread_id: str, saved: dict | None) -> bool:
+    if not saved or _is_completed_review(saved) or _is_active_task(thread_id):
+        return False
+    return bool(_checkpoint_next(thread_id, saved))
+
+
+def _run_resume(thread_id: str) -> None:
+    """Resume an interrupted LangGraph thread from its SQLite checkpoint."""
+    saved = get_thread_state(thread_id)
+    if saved is None:
+        _task_status.setdefault(thread_id, {})["error"] = "thread not found"
+        fail_review_job(thread_id, "thread not found")
+        return
+    if _is_completed_review(saved):
+        _task_status[thread_id] = _status_from_checkpoint(thread_id, saved)
+        finish_review_job(thread_id, saved.get("round_number", 1))
+        return
+
+    graph_app = None
+    try:
+        graph_app = _build_resume_graph(saved)
+        config = {"configurable": {"thread_id": thread_id}}
+        for chunk in graph_app.stream(None, config=config):
+            for node_name in chunk:
+                _on_node_complete(thread_id, node_name)
+        latest = get_thread_state(thread_id) or saved
+        _task_status.setdefault(thread_id, {})["finished"] = True
+        finish_review_job(thread_id, latest.get("round_number", saved.get("round_number", 1)))
+    except Exception as e:
+        error = repr(e)
+        _task_status.setdefault(thread_id, {})["error"] = error
+        fail_review_job(thread_id, error)
+    finally:
+        if graph_app is not None:
+            _release_graph_checkpointer(graph_app)
 
 
 def _run_review(thread_id: str, paper_text: str, title: str) -> None:
@@ -243,6 +336,7 @@ def _run_review(thread_id: str, paper_text: str, title: str) -> None:
 
     graph_app = None
     try:
+        upsert_review_job(thread_id=thread_id, title=title, status="running", round_number=1)
         graph_app = build_review_graph_with_checkpoint()
         initial_state = ReviewState(
             paper=paper_text,
@@ -277,8 +371,11 @@ def _run_review(thread_id: str, paper_text: str, title: str) -> None:
             for node_name in chunk:
                 _on_node_complete(thread_id, node_name)
         _task_status.setdefault(thread_id, {})["finished"] = True
+        finish_review_job(thread_id, 1)
     except Exception as e:  # 后台任务异常不能抛给客户端，需记录
-        _task_status.setdefault(thread_id, {})["error"] = repr(e)
+        error = repr(e)
+        _task_status.setdefault(thread_id, {})["error"] = error
+        fail_review_job(thread_id, error)
     finally:
         if graph_app is not None:
             _release_graph_checkpointer(graph_app)
@@ -292,6 +389,7 @@ async def upload(request: Request, file: UploadFile, background_tasks: Backgroun
     thread_id = str(uuid.uuid4())
     _paper_store[thread_id] = text
     _task_status[thread_id] = {"done": [], "current": ""}
+    upsert_review_job(thread_id=thread_id, title=file.filename, status="running", round_number=1)
     background_tasks.add_task(_run_review, thread_id, text, file.filename)
     if _wants_html(request):
         return RedirectResponse(f"/reviews/{thread_id}/progress", status_code=303)
@@ -311,6 +409,8 @@ def _decode_pdf(raw: bytes) -> str:
 def _result_payload(thread_id: str, saved: dict | None) -> dict:
     st = _task_status.get(thread_id, {})
     round_number = saved.get("round_number", 1) if saved else 1
+    job = get_review_job(thread_id)
+    can_resume = _can_resume(thread_id, saved)
     paper = (saved or {}).get("paper") or _paper_store.get(thread_id, "")
     rag_diagnostics = None
     if paper:
@@ -322,9 +422,11 @@ def _result_payload(thread_id: str, saved: dict | None) -> dict:
         "progress": (
             {"done": _completed_nodes_from_checkpoint(saved), "finished": True}
             if not st and _is_completed_review(saved)
-            else st
+            else st or _status_from_checkpoint(thread_id, saved, job)
         ),
         "locked": round_number >= 2,
+        "can_resume": can_resume,
+        "job_status": (job or {}).get("status"),
         "rag_diagnostics": rag_diagnostics,
     }
 
@@ -398,6 +500,7 @@ async def api_upload(file: UploadFile, background_tasks: BackgroundTasks):
     thread_id = str(uuid.uuid4())
     _paper_store[thread_id] = text
     _task_status[thread_id] = {"done": [], "current": ""}
+    upsert_review_job(thread_id=thread_id, title=file.filename, status="running", round_number=1)
     background_tasks.add_task(_run_review, thread_id, text, file.filename)
     return {"thread_id": thread_id}
 
@@ -413,6 +516,36 @@ async def api_result(thread_id: str):
     if saved is None and thread_id not in _task_status:
         raise HTTPException(status_code=404, detail="thread not found")
     return _result_payload(thread_id, saved)
+
+
+@app.post("/api/resume/{thread_id}")
+async def api_resume(thread_id: str, background_tasks: BackgroundTasks):
+    saved = get_thread_state(thread_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="thread not found")
+    if _is_completed_review(saved):
+        raise HTTPException(status_code=409, detail="review already completed")
+    if _is_active_task(thread_id):
+        raise HTTPException(status_code=409, detail="review already running")
+    if not _checkpoint_next(thread_id, saved):
+        raise HTTPException(status_code=409, detail="checkpoint is not resumable")
+
+    status = _status_from_checkpoint(thread_id, saved)
+    status.setdefault("done", [])
+    status.setdefault("current", "")
+    status.update({"finished": False, "error": None, "round": saved.get("round_number", 1)})
+    _task_status[thread_id] = status
+    upsert_review_job(
+        thread_id=thread_id,
+        title=(saved.get("paper_title") or "").strip(),
+        status="running",
+        round_number=saved.get("round_number", 1),
+        done=status.get("done", []),
+        current=status.get("current", ""),
+        error=None,
+    )
+    background_tasks.add_task(_run_resume, thread_id)
+    return {"status": "resume_started", "thread_id": thread_id}
 
 
 @app.get("/api/rebuttal/{thread_id}")
@@ -446,7 +579,31 @@ async def api_submit_rebuttal(
 
 @app.get("/api/history")
 async def api_history():
-    return {"threads": list_threads()}
+    threads = {item["thread_id"]: dict(item) for item in list_threads()}
+    jobs = {job["thread_id"]: job for job in list_review_jobs()}
+    for job in jobs.values():
+        item = threads.setdefault(
+            job["thread_id"],
+            {"thread_id": job["thread_id"], "title": job.get("title") or "未命名论文"},
+        )
+        if (not item.get("title") or item.get("title") == "未命名论文") and job.get("title"):
+            item["title"] = job["title"]
+    for thread_id, item in threads.items():
+        job = jobs.get(thread_id)
+        saved = get_thread_state(thread_id)
+        if not saved and not job:
+            continue
+        if _is_completed_review(saved):
+            item["status"] = "completed"
+        elif job:
+            item["status"] = job.get("status")
+        else:
+            item["status"] = "resumable"
+        if saved and not _is_completed_review(saved) and not _is_active_task(thread_id):
+            item["can_resume"] = True
+        elif job:
+            item["can_resume"] = False
+    return {"threads": list(threads.values())}
 
 
 @app.get("/api/settings")
@@ -547,6 +704,15 @@ async def _submit_rebuttal_impl(
 
     next_round = saved.get("round_number", 1) + 1
     st.update({"done": [], "current": "", "finished": False, "error": None, "round": next_round})
+    upsert_review_job(
+        thread_id=thread_id,
+        title=(saved.get("paper_title") or "").strip(),
+        status="running",
+        round_number=next_round,
+        done=[],
+        current="",
+        error=None,
+    )
 
     from paper_reviewer.graph import build_rebuttal_graph
 
@@ -565,8 +731,11 @@ async def _submit_rebuttal_impl(
                     _on_node_complete(thread_id, node_name)
             _task_status.setdefault(thread_id, {})["finished"] = True
             _task_status[thread_id]["round"] = next_round
+            finish_review_job(thread_id, next_round)
         except Exception as e:
-            _task_status.setdefault(thread_id, {})["error"] = repr(e)
+            error = repr(e)
+            _task_status.setdefault(thread_id, {})["error"] = error
+            fail_review_job(thread_id, error)
         finally:
             if graph_app is not None:
                 _release_graph_checkpointer(graph_app)

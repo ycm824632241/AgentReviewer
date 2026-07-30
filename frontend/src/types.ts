@@ -71,6 +71,8 @@ export type ReviewResultResponse = {
     [key: string]: unknown;
   };
   locked: boolean;
+  can_resume: boolean;
+  job_status?: string | null;
   rag_diagnostics?: RagDiagnostics | null;
 };
 
@@ -84,6 +86,8 @@ export type RebuttalInfoResponse = {
 export type HistoryItem = {
   thread_id: string;
   title?: string;
+  status?: string;
+  can_resume?: boolean;
 };
 
 export type HistoryResponse = {

@@ -10,6 +10,62 @@ from paper_reviewer.web import app
 
 client = TestClient(app)
 
+
+class TestJobStore:
+    def test_review_job_store_persists_progress(self, tmp_path):
+        from paper_reviewer.checkpoint import (
+            get_review_job,
+            update_review_job_progress,
+            upsert_review_job,
+        )
+
+        db_path = str(tmp_path / "jobs.db")
+
+        upsert_review_job(
+            "job-thread",
+            title="paper.txt",
+            status="running",
+            round_number=1,
+            db_path=db_path,
+        )
+        update_review_job_progress("job-thread", "field_analyst", db_path=db_path)
+        update_review_job_progress("job-thread", "field_analyst", db_path=db_path)
+
+        job = get_review_job("job-thread", db_path=db_path)
+
+        assert job == {
+            "thread_id": "job-thread",
+            "title": "paper.txt",
+            "status": "running",
+            "round_number": 1,
+            "done": ["field_analyst"],
+            "current": "field_analyst",
+            "error": None,
+        }
+
+    def test_review_job_store_lists_and_marks_terminal_states(self, tmp_path):
+        from paper_reviewer.checkpoint import (
+            fail_review_job,
+            finish_review_job,
+            list_review_jobs,
+            upsert_review_job,
+        )
+
+        db_path = str(tmp_path / "jobs.db")
+
+        upsert_review_job("finished-thread", title="done.txt", db_path=db_path)
+        finish_review_job("finished-thread", round_number=2, db_path=db_path)
+        upsert_review_job("failed-thread", title="bad.txt", db_path=db_path)
+        fail_review_job("failed-thread", "RuntimeError('boom')", db_path=db_path)
+
+        jobs = {job["thread_id"]: job for job in list_review_jobs(db_path=db_path)}
+
+        assert jobs["finished-thread"]["status"] == "completed"
+        assert jobs["finished-thread"]["round_number"] == 2
+        assert jobs["failed-thread"]["status"] == "failed"
+        assert jobs["failed-thread"]["error"] == "RuntimeError('boom')"
+
+
 class TestSkeleton:
     def test_index_returns_200(self):
         r = client.get("/")
@@ -205,6 +261,92 @@ class TestResultAndRebuttal:
         assert "already running" in r.text
 
 
+class TestApiResume:
+    def setup_method(self):
+        for thread_id in [
+            "resume-completed",
+            "resume-missing",
+            "resume-running",
+            "resume-start",
+            "resume-result",
+        ]:
+            web._task_status.pop(thread_id, None)
+
+    def test_api_resume_rejects_completed_checkpoint(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"editorial_decision": "Accept"}, raising=False)
+
+        r = client.post("/api/resume/resume-completed")
+
+        assert r.status_code == 409
+        assert r.json()["detail"] == "review already completed"
+
+    def test_api_resume_rejects_missing_checkpoint(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: None, raising=False)
+
+        r = client.post("/api/resume/resume-missing")
+
+        assert r.status_code == 404
+        assert r.json()["detail"] == "thread not found"
+
+    def test_api_resume_rejects_active_thread(self, monkeypatch):
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: {"paper": "paper", "round_number": 1}, raising=False)
+        web._task_status["resume-running"] = {"done": ["field_analyst"], "finished": False, "error": None}
+
+        r = client.post("/api/resume/resume-running")
+
+        assert r.status_code == 409
+        assert r.json()["detail"] == "review already running"
+
+    def test_api_resume_starts_checkpoint_resume(self, monkeypatch):
+        calls = []
+        saved = {"paper": "paper text", "paper_title": "paper.txt", "round_number": 1, "reviewer_configs": []}
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: saved, raising=False)
+        monkeypatch.setattr(web, "_checkpoint_next", lambda _thread_id, _saved: ("eic",), raising=False)
+        monkeypatch.setattr(web, "_run_resume", lambda thread_id: calls.append(thread_id), raising=False)
+        monkeypatch.setattr(web, "upsert_review_job", lambda **_kwargs: None, raising=False)
+
+        r = client.post("/api/resume/resume-start")
+
+        assert r.status_code == 200
+        assert r.json() == {"status": "resume_started", "thread_id": "resume-start"}
+        assert web._task_status["resume-start"]["done"] == []
+        assert web._task_status["resume-start"]["finished"] is False
+        assert calls == ["resume-start"]
+
+    def test_api_result_marks_interrupted_checkpoint_resumable(self, monkeypatch):
+        saved = {
+            "paper": "paper text",
+            "paper_title": "paper.txt",
+            "round_number": 1,
+            "reviewer_configs": [{"role": "EIC"}],
+        }
+        monkeypatch.setattr(web, "get_thread_state", lambda _thread_id: saved, raising=False)
+        monkeypatch.setattr(web, "_checkpoint_next", lambda _thread_id, _saved: ("eic",), raising=False)
+        monkeypatch.setattr(
+            web,
+            "get_review_job",
+            lambda _thread_id: {
+                "thread_id": "resume-result",
+                "title": "paper.txt",
+                "status": "failed",
+                "round_number": 1,
+                "done": ["field_analyst"],
+                "current": "field_analyst",
+                "error": "RuntimeError('boom')",
+            },
+            raising=False,
+        )
+
+        r = client.get("/api/result/resume-result")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["can_resume"] is True
+        assert body["job_status"] == "failed"
+        assert body["progress"]["done"] == ["field_analyst"]
+        assert body["progress"]["error"] == "RuntimeError('boom')"
+
+
 class TestTemplates:
     def test_progress_endpoint_is_sse(self):
         web._task_status["dummy-tid"] = {"done": [], "finished": True}
@@ -275,6 +417,8 @@ class TestApiEndpoints:
             "state": {"round_number": 2, "editorial_decision": "Accept", "paper": "short"},
             "progress": {"done": ["synthesizer"], "finished": True},
             "locked": True,
+            "can_resume": False,
+            "job_status": None,
             "rag_diagnostics": {
                 "enabled": False,
                 "paper_chars": 5,
@@ -446,6 +590,7 @@ class TestApiEndpoints:
 
     def test_api_history_returns_threads(self, monkeypatch):
         monkeypatch.setattr(web, "list_threads", lambda: [{"thread_id": "a"}, {"thread_id": "b"}], raising=False)
+        monkeypatch.setattr(web, "list_review_jobs", lambda: [], raising=False)
 
         r = client.get("/api/history")
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { fetchHistory, fetchResult, fetchRebuttalInfo, fetchSettings, openProgressStream, saveSettings, submitRebuttal, uploadPaper } from "./api";
+import { fetchHistory, fetchResult, fetchRebuttalInfo, fetchSettings, openProgressStream, resumeReview, saveSettings, submitRebuttal, uploadPaper } from "./api";
 import type { DecisionTrace, HistoryItem, ProgressEvent, RagDiagnostics, RebuttalInfoResponse, ReviewResultResponse, ReviewState, SettingsPayload, SettingsUpdate } from "./types";
 
 const reviewerReports: Array<[keyof ReviewState, string]> = [
@@ -78,6 +78,14 @@ function renderValue(value: unknown): string {
 function renderDecisionValue(value: unknown): string {
   if (typeof value !== "string") return renderValue(value);
   return decisionLabels[value] ?? value;
+}
+
+function historyStatusLabel(status?: string): string {
+  if (status === "completed") return "已完成";
+  if (status === "running") return "运行中";
+  if (status === "failed") return "可继续";
+  if (status === "resumable") return "可继续";
+  return "历史任务";
 }
 
 function isRecord(value: unknown): value is RecordValue {
@@ -730,6 +738,36 @@ export default function App() {
     }
   }
 
+  async function handleResumeReview(id: string) {
+    if (!id) return;
+    stopActiveStream();
+    selectedThreadRef.current = id;
+    setActiveView("review");
+    setThreadId(id);
+    setBusy(true);
+    setError("");
+    if (result?.thread_id !== id) {
+      setEvents([]);
+      setResult(null);
+      setRebuttalInfo(null);
+    }
+    try {
+      await resumeReview(id);
+      if (selectedThreadRef.current !== id) {
+        setBusy(false);
+        return;
+      }
+      setResult((prev) => prev?.thread_id === id ? { ...prev, can_resume: false } : prev);
+      listenProgress(id);
+      await refreshHistory();
+    } catch (err) {
+      if (selectedThreadRef.current === id) {
+        setError(err instanceof Error ? err.message : "继续审稿失败");
+      }
+      setBusy(false);
+    }
+  }
+
   async function openHistory(id: string) {
     stopActiveStream();
     selectedThreadRef.current = id;
@@ -742,7 +780,7 @@ export default function App() {
     try {
       const data = await loadResult(id);
       if (selectedThreadRef.current !== id) return;
-      if (!data.progress.finished && !data.progress.error) {
+      if (!data.progress.finished && !data.progress.error && !data.can_resume) {
         listenProgress(id);
       }
     } catch (err) {
@@ -809,7 +847,17 @@ export default function App() {
           </section>
 
           <section className="panel progress-panel">
-            <h2>审稿进度</h2>
+            <div className="panel-heading">
+              <div>
+                <h2>审稿进度</h2>
+                {result?.can_resume && <p className="muted">服务重启后可从已保存的 checkpoint 继续。</p>}
+              </div>
+              {result?.can_resume && (
+                <button className="secondary-action" onClick={() => handleResumeReview(result.thread_id)} disabled={busy}>
+                  继续审稿
+                </button>
+              )}
+            </div>
             <ol className="timeline">
               {events.filter((event) => !event.node.startsWith("__")).map((event, index) => (
                 <li key={`${event.node}-${index}`}>
@@ -858,10 +906,20 @@ export default function App() {
           </div>
           <div className="history-list history-page-list">
             {history.map((item) => (
-              <button key={item.thread_id} onClick={() => openHistory(item.thread_id)}>
-                <span className="history-title">{item.title || "未命名论文"}</span>
-                <small>{item.thread_id}</small>
-              </button>
+              <div className="history-item" key={item.thread_id}>
+                <button className="history-open" onClick={() => openHistory(item.thread_id)}>
+                  <span className="history-title">{item.title || "未命名论文"}</span>
+                  <small>{item.thread_id}</small>
+                </button>
+                <div className="history-actions">
+                  <span className="history-status">{historyStatusLabel(item.status)}</span>
+                  {item.can_resume && (
+                    <button className="secondary-action" onClick={() => handleResumeReview(item.thread_id)} disabled={busy}>
+                      继续审稿
+                    </button>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
           {history.length === 0 && <p className="muted">暂无历史记录。</p>}
