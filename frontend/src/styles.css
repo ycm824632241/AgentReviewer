@@ -254,6 +254,63 @@ h3 {
   font-weight: 750;
 }
 
+.editor-decision-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.editor-decision-panel .decision {
+  margin: 0;
+}
+
+.decision-trace {
+  border: 1px solid #ededed;
+  border-radius: 18px;
+  padding: 16px;
+  background: #fafafa;
+}
+
+.decision-trace h3 {
+  margin-bottom: 10px;
+}
+
+.decision-summary {
+  margin: 0 0 14px;
+  color: #333;
+  line-height: 1.55;
+}
+
+.decision-trace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.decision-trace-grid div {
+  border: 1px solid #ededed;
+  border-radius: 16px;
+  padding: 12px 13px;
+  background: #fff;
+}
+
+.decision-trace-grid dt {
+  color: #666;
+  font-size: 12px;
+}
+
+.decision-trace-grid dd {
+  margin: 5px 0 0;
+  color: #111;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.decision-trace .muted {
+  margin: 12px 0 0;
+}
+
 .reviewer-pager {
   display: grid;
   gap: 16px;
@@ -644,6 +701,10 @@ h3 {
   }
 
   .rag-diagnostics dl {
+    grid-template-columns: 1fr;
+  }
+
+  .decision-trace-grid {
     grid-template-columns: 1fr;
   }
 }

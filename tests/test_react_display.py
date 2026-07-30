@@ -70,14 +70,37 @@ def test_editor_decision_starts_with_collapsed_scoring_logic_explanation():
     assert '<details className="scoring-logic">' in app
     assert '<summary className="scoring-logic-summary">' in app
     assert "评分逻辑说明" in app
-    assert "普通审稿人平衡评分｜DA 仅压力测试｜主编综合校准" in app
+    assert "普通评审人平衡评分｜魔鬼评审人仅压力测试｜综合编辑校准" in app
     assert "原创性 20%" in app
     assert "方法 25%" in app
     assert "证据 25%" in app
     assert "结构 15%" in app
     assert "写作 15%" in app
-    assert app.index("<ScoringLogicDisclosure />") < app.index("<h2>编辑决定</h2>")
+    assert app.index("<ScoringLogicDisclosure />") < app.index("<h2>综合编辑决定</h2>")
     assert ".scoring-logic[open]" in css
+
+
+def test_editor_decision_is_a_traceable_panel():
+    app = read_frontend("App.tsx")
+    css = read_frontend("styles.css")
+    types = read_frontend("types.ts")
+
+    assert "type DecisionTrace" in types
+    assert "decision_trace?: DecisionTrace" in types
+    assert "function EditorDecisionPanel" in app
+    assert "function DecisionTracePanel" in app
+    assert "<EditorDecisionPanel state={state} />" in app
+    assert "决策依据" in app
+    assert "普通评审人推荐" in app
+    assert "魔鬼评审人压力测试" in app
+    assert "规则校准" in app
+    assert "reviewer_recommendations" in app
+    assert "reviewer_weighted_scores" in app
+    assert "Editor-in-Chief" not in app
+    assert "DA 压力测试" not in app
+    assert "CRITICAL 数量" not in app
+    assert ".editor-decision-panel" in css
+    assert ".decision-trace" in css
 
 
 def test_console_navigation_keeps_rebuttal_inside_review_workspace():
@@ -135,6 +158,16 @@ def test_rag_diagnostics_are_collapsed_inside_progress_panel():
     assert "{result?.rag_diagnostics && <RagDiagnosticsPanel diagnostics={result.rag_diagnostics} />}" in app
     assert "{result && <RagDiagnosticsPanel diagnostics={result.rag_diagnostics} />}" not in app
     assert ".rag-diagnostics[open]" in css
+
+
+def test_history_result_restores_progress_timeline_from_saved_done_nodes():
+    app = read_frontend("App.tsx")
+    types = read_frontend("types.ts")
+
+    assert "done?: string[]" in types
+    assert "const progressNodeLabels" in app
+    assert "function progressEventsFromResult" in app
+    assert "setEvents((prev) => prev.length > 0 ? prev : restoredEvents);" in app
 
 
 def test_console_style_uses_reference_like_black_and_white_shell():

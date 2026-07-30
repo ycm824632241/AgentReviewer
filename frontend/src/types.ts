@@ -11,6 +11,17 @@ export type ReviewerConfig = {
   [key: string]: unknown;
 };
 
+export type DecisionTrace = {
+  original_decision?: string;
+  final_decision?: string;
+  decision_rationale?: string;
+  decision_summary?: string;
+  reviewer_recommendations?: Record<string, string>;
+  reviewer_weighted_scores?: Record<string, number>;
+  da_critical_count?: number;
+  applied_rules?: string[];
+};
+
 export type RebuttalReviewer = ReviewerConfig & {
   target: string;
 };
@@ -27,6 +38,7 @@ export type ReviewState = {
   devils_advocate_report?: unknown;
   consensus_analysis?: unknown;
   dimension_scores?: Record<string, number>;
+  decision_trace?: DecisionTrace;
   revision_roadmap?: unknown;
   [key: string]: unknown;
 };
@@ -53,6 +65,7 @@ export type ReviewResultResponse = {
   thread_id: string;
   state: ReviewState | null;
   progress: {
+    done?: string[];
     finished?: boolean;
     error?: string | null;
     [key: string]: unknown;

@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchHistory, fetchResult, fetchRebuttalInfo, fetchSettings, openProgressStream, saveSettings, submitRebuttal, uploadPaper } from "./api";
-import type { HistoryItem, ProgressEvent, RagDiagnostics, RebuttalInfoResponse, ReviewResultResponse, ReviewState, SettingsPayload, SettingsUpdate } from "./types";
+import type { DecisionTrace, HistoryItem, ProgressEvent, RagDiagnostics, RebuttalInfoResponse, ReviewResultResponse, ReviewState, SettingsPayload, SettingsUpdate } from "./types";
 
 const reviewerReports: Array<[keyof ReviewState, string]> = [
-  ["eic_report", "Editor-in-Chief"],
+  ["eic_report", "主编视角评审人"],
   ["methodology_report", "方法论专家"],
   ["domain_report", "领域专家"],
   ["perspective_report", "跨学科视角"],
-  ["devils_advocate_report", "Devil's Advocate"]
+  ["devils_advocate_report", "魔鬼评审人"]
 ];
 
 type ActiveStream = {
@@ -29,6 +29,39 @@ const scoreLabels: Record<string, string> = {
   weighted_average: "加权平均"
 };
 
+const decisionLabels: Record<string, string> = {
+  Accept: "接收",
+  "Minor Revision": "小修",
+  "Major Revision": "大修",
+  Reject: "拒稿"
+};
+
+const progressNodeLabels: Record<string, string> = {
+  field_analyst: "领域分析",
+  eic: "主编视角评审",
+  methodology: "方法论审稿",
+  domain: "领域专家审稿",
+  perspective: "跨学科审稿",
+  devils_advocate: "魔鬼评审人压力测试",
+  rebuttal_eic: "主编视角二审",
+  rebuttal_methodology: "方法论二审",
+  rebuttal_domain: "领域专家二审",
+  rebuttal_perspective: "跨学科二审",
+  rebuttal_devils_advocate: "魔鬼评审人二审",
+  synthesizer: "编辑综合"
+};
+
+function progressEventsFromResult(data: ReviewResultResponse): ProgressEvent[] {
+  const done = Array.isArray(data.progress.done) ? data.progress.done : [];
+  return done
+    .filter((node): node is string => typeof node === "string" && !node.startsWith("__"))
+    .map((node) => ({
+      node,
+      label: progressNodeLabels[node] ?? node,
+      status: "done"
+    }));
+}
+
 function renderValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "暂无";
   if (typeof value === "string") return value;
@@ -40,6 +73,11 @@ function renderValue(value: unknown): string {
       .join("；");
   }
   return String(value);
+}
+
+function renderDecisionValue(value: unknown): string {
+  if (typeof value !== "string") return renderValue(value);
+  return decisionLabels[value] ?? value;
 }
 
 function isRecord(value: unknown): value is RecordValue {
@@ -134,15 +172,78 @@ function ScoringLogicDisclosure() {
     <details className="scoring-logic">
       <summary className="scoring-logic-summary">
         <span className="scoring-logic-title">评分逻辑说明</span>
-        <span className="scoring-logic-note">普通审稿人平衡评分｜DA 仅压力测试｜主编综合校准</span>
+        <span className="scoring-logic-note">普通评审人平衡评分｜魔鬼评审人仅压力测试｜综合编辑校准</span>
       </summary>
       <ul className="scoring-logic-list">
-        <li>普通审稿人：EIC、方法论、领域、跨学科会同时给出优点、问题、推荐决定和五维评分。</li>
+        <li>普通评审人：主编视角评审人、方法论、领域、跨学科会同时给出优点、问题、推荐决定和五维评分。</li>
         <li>五维权重：原创性 20%、方法 25%、证据 25%、结构 15%、写作 15%。</li>
-        <li>Devil's Advocate：不打分，只做压力测试；CRITICAL 问题会影响最终决定。</li>
-        <li>主编综合：不是简单平均，而是综合 5 份报告后输出最终决定和 final scores，并做规则校准。</li>
+        <li>魔鬼评审人：不打分，只做压力测试和风险提示，不参与最终评分或录用决定。</li>
+        <li>综合编辑：不是简单平均，而是综合普通评审报告后输出最终决定和最终五维评分，并做规则校准。</li>
       </ul>
     </details>
+  );
+}
+
+function renderDecisionRecord(record: Record<string, string | number> | undefined): string {
+  if (!record || Object.keys(record).length === 0) return "暂无";
+  return Object.entries(record).map(([role, value]) => `${role}：${renderDecisionValue(value)}`).join("；");
+}
+
+function DecisionTracePanel({ trace }: { trace?: DecisionTrace }) {
+  if (!trace) {
+    return (
+      <section className="decision-trace">
+        <h3>决策依据</h3>
+        <p className="muted">暂无本次决策轨迹。</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="decision-trace">
+      <h3>决策依据</h3>
+      <p className="decision-summary">{renderValue(trace.decision_summary)}</p>
+      <dl className="decision-trace-grid">
+        <div>
+          <dt>普通评审人推荐</dt>
+          <dd>{renderDecisionRecord(trace.reviewer_recommendations)}</dd>
+        </div>
+        <div>
+          <dt>普通评审人加权分</dt>
+          <dd>{renderDecisionRecord(trace.reviewer_weighted_scores)}</dd>
+        </div>
+        <div>
+          <dt>魔鬼评审人压力测试</dt>
+          <dd>关键风险数量：{renderValue(trace.da_critical_count)}</dd>
+        </div>
+        <div>
+          <dt>规则校准</dt>
+          <dd>{asList(trace.applied_rules).length > 0 ? renderValue(trace.applied_rules) : "未触发硬性校准规则"}</dd>
+        </div>
+      </dl>
+      {trace.decision_rationale && <p className="muted">综合编辑说明：{trace.decision_rationale}</p>}
+    </section>
+  );
+}
+
+function EditorDecisionPanel({ state }: { state?: ReviewState | null }) {
+  return (
+    <section className="panel editor-decision-panel">
+      <ScoringLogicDisclosure />
+      <div className="panel-heading">
+        <div>
+          <h2>综合编辑决定</h2>
+          <p className="muted">单独汇总最终决定、评分和本次决策轨迹。</p>
+        </div>
+        <span className="status-pill">{renderDecisionValue(state?.editorial_decision)}</span>
+      </div>
+      <p className="decision">{renderDecisionValue(state?.editorial_decision)}</p>
+      <DecisionTracePanel trace={state?.decision_trace} />
+      <ReportSection title="五维最终评分">
+        <ScoreGrid scores={state?.dimension_scores} />
+      </ReportSection>
+      <FinalIssueSummary roadmap={state?.revision_roadmap} />
+    </section>
   );
 }
 
@@ -179,7 +280,7 @@ function ReportCard({ label, report }: { label: string; report: unknown }) {
     <article className="report-card">
       <div className="report-card-header">
         <h3>{label}</h3>
-        {Boolean(recommendation) && <span className="recommendation-chip">{renderValue(recommendation)}</span>}
+        {Boolean(recommendation) && <span className="recommendation-chip">{renderDecisionValue(recommendation)}</span>}
       </div>
 
       <div className="report-meta">
@@ -501,6 +602,10 @@ export default function App() {
 
     setResult(data);
     setRebuttalInfo(null);
+    const restoredEvents = progressEventsFromResult(data);
+    if (restoredEvents.length > 0) {
+      setEvents((prev) => prev.length > 0 ? prev : restoredEvents);
+    }
     if (!data.state) return data;
 
     try {
@@ -718,13 +823,7 @@ export default function App() {
           </section>
 
           {result && (
-            <section className="panel">
-              <ScoringLogicDisclosure />
-              <h2>编辑决定</h2>
-              <p className="decision">{renderValue(state?.editorial_decision)}</p>
-              <ScoreGrid scores={state?.dimension_scores} />
-              <FinalIssueSummary roadmap={state?.revision_roadmap} />
-            </section>
+            <EditorDecisionPanel state={state} />
           )}
 
           {result && (

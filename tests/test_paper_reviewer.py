@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from paper_reviewer.state import ReviewState
 from paper_reviewer.rubrics import calculate_weighted_score, score_to_decision
+from paper_reviewer.utils import normalize_report
 from paper_reviewer.graph import build_review_graph
 from paper_reviewer.graph import build_rebuttal_graph, _route_rebuttal
 
@@ -37,6 +38,21 @@ class TestRubrics:
 
     def test_score_to_decision_reject(self):
         assert score_to_decision(40) == "Reject"
+
+    def test_normalize_report_aligns_recommendation_with_weighted_score(self):
+        report = normalize_report({
+            "recommendation": "Accept",
+            "dimension_scores": {
+                "originality": 30,
+                "methodology": 35,
+                "evidence": 30,
+                "coherence": 40,
+                "writing": 35,
+            },
+        })
+
+        assert report["weighted_average"] == 33.5
+        assert report["recommendation"] == "Reject"
 
 
 class TestState:

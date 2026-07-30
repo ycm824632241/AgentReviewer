@@ -187,18 +187,39 @@ def _embedding_settings_changed(updates: dict[str, str], previous: dict[str, str
 # ── 节点中文名（用于前端展示） ──
 NODE_LABELS = {
     "field_analyst": "领域分析",
-    "eic": "EIC 审稿",
+    "eic": "主编视角评审",
     "methodology": "方法论审稿",
     "domain": "领域专家审稿",
     "perspective": "跨学科审稿",
-    "devils_advocate": "魔鬼代言人挑战",
-    "rebuttal_eic": "EIC 二审",
+    "devils_advocate": "魔鬼评审人压力测试",
+    "rebuttal_eic": "主编视角二审",
     "rebuttal_methodology": "方法论二审",
     "rebuttal_domain": "领域专家二审",
     "rebuttal_perspective": "跨学科二审",
-    "rebuttal_devils_advocate": "魔鬼代言人二审",
+    "rebuttal_devils_advocate": "魔鬼评审人二审",
     "synthesizer": "编辑综合",
 }
+
+
+ROUND_ONE_PROGRESS_FIELDS = (
+    ("field_analyst", "reviewer_configs"),
+    ("eic", "eic_report"),
+    ("methodology", "methodology_report"),
+    ("domain", "domain_report"),
+    ("perspective", "perspective_report"),
+    ("devils_advocate", "devils_advocate_report"),
+)
+
+
+def _completed_nodes_from_checkpoint(saved: dict | None) -> list[str]:
+    """根据已保存 checkpoint 还原历史审稿进度节点。"""
+    if not saved:
+        return []
+
+    done = [node for node, field in ROUND_ONE_PROGRESS_FIELDS if saved.get(field)]
+    if _is_completed_review(saved):
+        done.append("synthesizer")
+    return done
 
 
 def _on_node_complete(thread_id: str, node_name: str) -> None:
@@ -242,6 +263,7 @@ def _run_review(thread_id: str, paper_text: str, title: str) -> None:
             editorial_decision="",
             consensus_analysis=None,
             dimension_scores=None,
+            decision_trace=None,
             revision_roadmap=None,
             synthesized_round=None,
             round_number=1,
@@ -298,7 +320,7 @@ def _result_payload(thread_id: str, saved: dict | None) -> dict:
         "thread_id": thread_id,
         "state": saved,
         "progress": (
-            {"done": ["synthesizer"], "finished": True}
+            {"done": _completed_nodes_from_checkpoint(saved), "finished": True}
             if not st and _is_completed_review(saved)
             else st
         ),

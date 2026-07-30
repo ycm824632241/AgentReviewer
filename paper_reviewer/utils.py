@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from paper_reviewer.config import get_env_path, get_env_value
+from paper_reviewer.rubrics import calculate_weighted_score, score_to_decision
 
 
 def _extract_json(text: str) -> str:
@@ -142,21 +143,29 @@ def normalize_report(report: dict) -> dict:
     """
     标准化审稿人报告：分数标度 + 推荐决定。
     在各 reviewer agent 返回前调用。"""
+    normalized_recommendation = None
+    if "recommendation" in report:
+        normalized_recommendation = normalize_recommendation(report["recommendation"])
+
     # 标准化分数
     if "dimension_scores" in report:
         report["dimension_scores"] = normalize_scores(report["dimension_scores"])
-        # 重新计算加权平均
-        weights = {
-            "originality": 0.20, "methodology": 0.25,
-            "evidence": 0.25, "coherence": 0.15, "writing": 0.15
-        }
-        report["weighted_average"] = round(
-            sum(report["dimension_scores"].get(d, 0) * w for d, w in weights.items()), 1
-        )
+        report["weighted_average"] = calculate_weighted_score(report["dimension_scores"])
+
+        if normalized_recommendation:
+            score_based_recommendation = score_to_decision(report["weighted_average"])
+            report["recommendation"] = score_based_recommendation
+            if normalized_recommendation != score_based_recommendation:
+                report["recommendation_calibration"] = {
+                    "model_recommendation": normalized_recommendation,
+                    "score_based_recommendation": score_based_recommendation,
+                    "weighted_average": report["weighted_average"],
+                    "reason": "模型推荐与五维加权分不一致，已按评分规则校准。",
+                }
 
     # 标准化推荐决定
-    if "recommendation" in report:
-        report["recommendation"] = normalize_recommendation(report["recommendation"])
+    if "recommendation" in report and "dimension_scores" not in report:
+        report["recommendation"] = normalized_recommendation
 
     return report
 

@@ -39,7 +39,7 @@ def eic_node(state: ReviewState, rag_index=None) -> ReviewState:
         essay=paper_text
     ))
     report = _safe_json_loads(_extract_json(result.content))
-    report["reviewer_role"] = "EIC"
+    report["reviewer_role"] = "主编视角评审人"
     report["weighted_average"] = sum(
         report["dimension_scores"][d] * w
         for d, w in [("originality", 0.20), ("methodology", 0.25),

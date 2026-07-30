@@ -56,6 +56,7 @@ class ReviewState(TypedDict):
     editorial_decision: str
     consensus_analysis: Optional[dict]
     dimension_scores: Optional[dict]
+    decision_trace: Optional[dict]
     revision_roadmap: Optional[dict]
     synthesized_round: Optional[int]   # 生成当前综合结论的轮次
     # ── Rebuttal 环节新增字段 ──

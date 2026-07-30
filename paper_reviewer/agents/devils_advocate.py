@@ -33,6 +33,6 @@ def devils_advocate_node(state: ReviewState, rag_index=None) -> ReviewState:
     ])
     result = llm.invoke(prompt.format(essay=paper_text))
     report = _safe_json_loads(_extract_json(result.content))
-    report["reviewer_role"] = "Devil's Advocate"
+    report["reviewer_role"] = "魔鬼评审人"
     report = normalize_report(report)
     return {"devils_advocate_report": report}

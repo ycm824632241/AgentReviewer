@@ -32,10 +32,21 @@ def test_editor_decision_is_capped_when_reviewers_only_accept_or_minor():
     aligned = synthesizer._align_decision_with_reviewer_consensus(decision_result, state)
 
     assert aligned["editorial_decision"] == "Minor Revision"
-    assert "多数审稿建议" in aligned["decision_rationale"]
+    assert "多数普通评审建议" in aligned["decision_rationale"]
+    trace = aligned["decision_trace"]
+    assert trace["original_decision"] == "Major Revision"
+    assert trace["final_decision"] == "Minor Revision"
+    assert trace["da_critical_count"] == 0
+    assert trace["reviewer_recommendations"] == {
+        "主编视角评审人": "Accept",
+        "方法论评审人": "Accept",
+        "领域评审人": "Minor Revision",
+        "跨学科评审人": "Accept",
+    }
+    assert any("校准" in rule for rule in trace["applied_rules"])
 
 
-def test_da_critical_prevents_accept_decision():
+def test_da_critical_does_not_prevent_accept_decision():
     decision_result = {
         "editorial_decision": "Accept",
         "decision_rationale": "模型给出了接收决定",
@@ -52,5 +63,37 @@ def test_da_critical_prevents_accept_decision():
 
     aligned = synthesizer._align_decision_with_reviewer_consensus(decision_result, state)
 
-    assert aligned["editorial_decision"] == "Minor Revision"
-    assert "DA CRITICAL" in aligned["decision_rationale"]
+    assert aligned["editorial_decision"] == "Accept"
+    assert "DA CRITICAL" not in aligned["decision_rationale"]
+    trace = aligned["decision_trace"]
+    assert trace["original_decision"] == "Accept"
+    assert trace["final_decision"] == "Accept"
+    assert trace["da_critical_count"] == 1
+    assert any("魔鬼评审人仅作为压力测试" in rule for rule in trace["applied_rules"])
+
+
+def test_decision_trace_records_weighted_scores_and_summary():
+    decision_result = {
+        "editorial_decision": "Minor Revision",
+        "decision_rationale": "贡献明确，但证据仍需补强。",
+    }
+    state = {
+        "eic_report": {"recommendation": "Minor Revision", "weighted_average": 72.5},
+        "methodology_report": {"recommendation": "Major Revision", "weighted_average": 61.0},
+        "domain_report": {"recommendation": "Minor Revision", "weighted_average": 70.0},
+        "perspective_report": {"recommendation": "Accept", "weighted_average": 78.0},
+        "devils_advocate_report": {"issues": {"CRITICAL": []}},
+    }
+
+    aligned = synthesizer._align_decision_with_reviewer_consensus(decision_result, state)
+    trace = aligned["decision_trace"]
+
+    assert trace["reviewer_weighted_scores"] == {
+        "主编视角评审人": 72.5,
+        "方法论评审人": 61.0,
+        "领域评审人": 70.0,
+        "跨学科评审人": 78.0,
+    }
+    assert "普通评审" in trace["decision_summary"]
+    assert "魔鬼评审人" in trace["decision_summary"]
+    assert trace["decision_rationale"] == "贡献明确，但证据仍需补强。"

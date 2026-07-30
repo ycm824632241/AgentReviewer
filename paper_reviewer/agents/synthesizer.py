@@ -20,6 +20,21 @@ _DECISION_SEVERITY = {
 }
 
 
+_REVIEWER_TRACE_ROLES = [
+    ("eic_report", "主编视角评审人"),
+    ("methodology_report", "方法论评审人"),
+    ("domain_report", "领域评审人"),
+    ("perspective_report", "跨学科评审人"),
+]
+
+_DECISION_LABELS = {
+    "Accept": "接收",
+    "Minor Revision": "小修",
+    "Major Revision": "大修",
+    "Reject": "拒稿",
+}
+
+
 SYNTHESIZER_DECISION_SCHEMA = """
 输出为 JSON 格式（精简版，仅包含决定和分数）:
 {{
@@ -34,7 +49,7 @@ SYNTHESIZER_DECISION_SCHEMA = """
     "weighted_total": 73.2
   }},
   "consensus_summary": "一句话概括共识",
-  "devils_advocate_handling": "DA的CRITICAL问题编辑如何处理"
+  "devils_advocate_handling": "魔鬼评审人提出的关键风险如何作为修订线索处理"
 }}
 """
 
@@ -124,7 +139,7 @@ def _get_da_critical_issues(da_report: dict) -> list:
 
 def _reviewer_recommendations(state: ReviewState) -> list[str]:
     recommendations = []
-    for role_key in ["eic_report", "methodology_report", "domain_report", "perspective_report"]:
+    for role_key, _ in _REVIEWER_TRACE_ROLES:
         report = state.get(role_key, {})
         if not isinstance(report, dict):
             continue
@@ -134,30 +149,104 @@ def _reviewer_recommendations(state: ReviewState) -> list[str]:
     return recommendations
 
 
+def _coerce_score(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return round(float(value), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reviewer_trace_values(state: ReviewState) -> tuple[dict[str, str], dict[str, float]]:
+    recommendations = {}
+    weighted_scores = {}
+    for role_key, label in _REVIEWER_TRACE_ROLES:
+        report = state.get(role_key, {})
+        if not isinstance(report, dict):
+            continue
+
+        normalized = _normalize_decision(report.get("recommendation") or report.get("decision"))
+        if normalized:
+            recommendations[label] = normalized
+
+        score = _coerce_score(report.get("weighted_average"))
+        if score is not None:
+            weighted_scores[label] = score
+
+    return recommendations, weighted_scores
+
+
+def _recommendation_distribution(recommendations: dict[str, str]) -> str:
+    if not recommendations:
+        return "普通评审人暂无结构化推荐"
+
+    parts = []
+    for decision in ["Accept", "Minor Revision", "Major Revision", "Reject"]:
+        count = sum(1 for value in recommendations.values() if value == decision)
+        if count:
+            parts.append(f"{count} 位建议{_DECISION_LABELS.get(decision, decision)}")
+    return "普通评审推荐：" + "，".join(parts)
+
+
+def _build_decision_trace(
+    decision_result: dict,
+    state: ReviewState,
+    applied_rules: list[str],
+    original_decision: str,
+) -> dict:
+    recommendations, weighted_scores = _reviewer_trace_values(state)
+    critical_count = len(_get_da_critical_issues(state.get("devils_advocate_report", {}) or {}))
+    final_decision = _normalize_decision(decision_result.get("editorial_decision")) or str(
+        decision_result.get("editorial_decision", "")
+    ).strip()
+
+    if not applied_rules:
+        applied_rules = ["未触发硬性校准规则。"]
+
+    decision_summary = (
+        f"{_recommendation_distribution(recommendations)}；"
+        f"魔鬼评审人关键风险：{critical_count} 个（仅作风险提示）；"
+        f"综合编辑决定：{_DECISION_LABELS.get(final_decision, final_decision) or '暂无'}。"
+    )
+
+    return {
+        "original_decision": original_decision,
+        "final_decision": final_decision,
+        "decision_rationale": decision_result.get("decision_rationale", ""),
+        "decision_summary": decision_summary,
+        "reviewer_recommendations": recommendations,
+        "reviewer_weighted_scores": weighted_scores,
+        "da_critical_count": critical_count,
+        "applied_rules": applied_rules,
+    }
+
+
 def _append_rationale(decision_result: dict, note: str) -> None:
     rationale = str(decision_result.get("decision_rationale", "")).strip()
     decision_result["decision_rationale"] = f"{rationale} {note}".strip()
 
 
 def _align_decision_with_reviewer_consensus(decision_result: dict, state: ReviewState) -> dict:
-    """Keep the editor decision consistent with reviewer consensus and DA hard gates."""
+    """Keep the editor decision consistent with ordinary reviewer consensus."""
     aligned = dict(decision_result)
     decision = _normalize_decision(aligned.get("editorial_decision")) or "Major Revision"
+    original_decision = decision
+    applied_rules = ["魔鬼评审人仅作为压力测试和风险提示，不参与最终评分或录用决定。"]
     recommendations = _reviewer_recommendations(state)
-    has_da_critical = bool(_get_da_critical_issues(state.get("devils_advocate_report", {}) or {}))
 
-    if has_da_critical and decision == "Accept":
-        decision = "Minor Revision"
-        _append_rationale(aligned, "已根据 DA CRITICAL 问题将接收决定校准为至少小修。")
-
-    if recommendations and not has_da_critical:
+    if recommendations:
         all_accept_or_minor = all(_DECISION_SEVERITY[rec] <= _DECISION_SEVERITY["Minor Revision"] for rec in recommendations)
         too_severe = _DECISION_SEVERITY[decision] > _DECISION_SEVERITY["Minor Revision"]
         if all_accept_or_minor and too_severe:
             decision = "Minor Revision"
-            _append_rationale(aligned, "多数审稿建议为 Accept/Minor，未发现 DA CRITICAL，因此最终决定校准为小修。")
+            _append_rationale(aligned, "多数普通评审建议为接收或小修，因此综合编辑决定校准为小修。")
+            applied_rules.append("普通评审共识规则：多数建议为接收或小修，原决定过严，已校准为小修。")
+        else:
+            applied_rules.append("普通评审意见已纳入综合编辑判断，未触发过度严厉校准。")
 
     aligned["editorial_decision"] = decision
+    aligned["decision_trace"] = _build_decision_trace(aligned, state, applied_rules, original_decision)
     return aligned
 
 
@@ -172,7 +261,7 @@ def synthesizer_node(state: ReviewState) -> ReviewState:
         ("system", SYNTHESIZER_SYSTEM + "\n\n" + SYNTHESIZER_DECISION_SCHEMA),
         ("human", """请综合以下审稿报告，做出编辑决定。
 
-EIC 报告: {eic}
+主编视角评审人报告: {eic}
 
 方法论审稿人报告: {methodology}
 
@@ -180,9 +269,9 @@ EIC 报告: {eic}
 
 跨学科视角报告: {perspective}
 
-魔鬼代言人报告: {da}
+魔鬼评审人报告: {da}
 
-铁律: 如果 DA 有 CRITICAL 问题，editorial_decision 不能是 Accept。"""),
+说明: 魔鬼评审人报告仅作为压力测试和风险提示，不参与普通评审推荐统计，也不能作为否决或降级最终决定的硬规则。"""),
     ])
 
     decision_inputs = {
@@ -227,10 +316,10 @@ EIC 报告: {eic}
             elif isinstance(w, str):
                 all_weaknesses.append(f"[{role}] {w}")
 
-    # DA 的 CRITICAL
+    # 魔鬼评审人的关键风险仅进入修订路线图，不参与最终决定校准。
     da_issues = _get_da_critical_issues(state.get("devils_advocate_report", {}) or {})
     for issue in da_issues:
-        all_weaknesses.append(f"[DA-CRITICAL] {issue.get('description', issue)}")
+        all_weaknesses.append(f"[魔鬼评审人关键风险] {issue.get('description', issue)}")
 
     roadmap_prompt = ChatPromptTemplate.from_messages([
         ("system", SYNTHESIZER_ROADMAP_SCHEMA),
@@ -241,7 +330,7 @@ EIC 报告: {eic}
 审查问题清单:
 {weaknesses}
 
-要求: 先整合分析，输出 integrated_paper_issues 作为论文层面的核心修改问题；不要逐个审稿人罗列。P1 回应 DA 的 CRITICAL 问题和核心方法论缺陷，P2 补充内容，P3 格式语言。"""),
+要求: 先整合分析，输出 integrated_paper_issues 作为论文层面的核心修改问题；不要逐个审稿人罗列。P1 回应核心方法论缺陷和魔鬼评审人提出的关键风险，P2 补充内容，P3 格式语言。"""),
     ])
 
     roadmap_inputs = {
@@ -270,5 +359,6 @@ EIC 报告: {eic}
         },
         "revision_roadmap": roadmap_result.get("revision_roadmap", {}),
         "dimension_scores": decision_result.get("final_scores", {}),
+        "decision_trace": decision_result.get("decision_trace", {}),
         "synthesized_round": state.get("round_number", 1),
     }

@@ -308,6 +308,40 @@ class TestApiEndpoints:
         assert r.status_code == 200
         assert r.json()["progress"] == {"done": ["synthesizer"], "finished": True}
 
+    def test_api_result_restores_completed_progress_from_checkpoint_without_task_status(self, monkeypatch):
+        monkeypatch.setattr(
+            web,
+            "get_thread_state",
+            lambda _thread_id: {
+                "round_number": 1,
+                "synthesized_round": 1,
+                "reviewer_configs": [{"role": "EIC"}],
+                "eic_report": {"recommendation": "Minor Revision"},
+                "methodology_report": {"recommendation": "Minor Revision"},
+                "domain_report": {"recommendation": "Minor Revision"},
+                "perspective_report": {"recommendation": "Minor Revision"},
+                "devils_advocate_report": {"challenge_level": "MAJOR"},
+                "editorial_decision": "Minor Revision",
+            },
+            raising=False,
+        )
+
+        r = client.get("/api/result/checkpoint-completed-full-progress")
+
+        assert r.status_code == 200
+        assert r.json()["progress"] == {
+            "done": [
+                "field_analyst",
+                "eic",
+                "methodology",
+                "domain",
+                "perspective",
+                "devils_advocate",
+                "synthesizer",
+            ],
+            "finished": True,
+        }
+
     def test_api_result_does_not_complete_interrupted_round_two_checkpoint(self, monkeypatch):
         monkeypatch.setattr(
             web,

@@ -5,7 +5,7 @@ from paper_reviewer.utils import get_llm, _extract_json, _safe_json_loads, norma
 import json
 
 METHODOLOGY_OUTPUT_SCHEMA = """
-输出为 JSON 格式（与 EIC 相同的结构）：
+输出为 JSON 格式（与主编视角评审人相同的结构）：
 {{
   "recommendation": "...",
   "confidence": 4,
@@ -34,7 +34,7 @@ def methodology_reviewer_node(state: ReviewState, rag_index=None) -> ReviewState
         essay=paper_text
     ))
     report = _safe_json_loads(_extract_json(result.content))
-    report["reviewer_role"] = "Methodology"
+    report["reviewer_role"] = "方法论评审人"
     report["weighted_average"] = sum(
         report["dimension_scores"][d] * w
         for d, w in [("originality", 0.20), ("methodology", 0.25),
