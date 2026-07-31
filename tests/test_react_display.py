@@ -103,6 +103,18 @@ def test_editor_decision_is_a_traceable_panel():
     assert ".decision-trace" in css
 
 
+def test_editor_decision_loads_after_synthesis_and_uses_bilingual_labels():
+    """A completed synthesizer step must populate a bilingual final decision."""
+    app = read_frontend("App.tsx")
+
+    assert 'if (event.node === "synthesizer")' in app
+    assert 'await loadResult(id);' in app
+    assert 'Accept: "接收（ACCEPT）"' in app
+    assert '"Minor Revision": "小修（MINOR REVISION）"' in app
+    assert '"Major Revision": "大修（MAJOR REVISION）"' in app
+    assert 'Reject: "拒稿（REJECT）"' in app
+
+
 def test_console_navigation_keeps_rebuttal_inside_review_workspace():
     app = read_frontend("App.tsx")
 

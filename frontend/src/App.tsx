@@ -30,10 +30,10 @@ const scoreLabels: Record<string, string> = {
 };
 
 const decisionLabels: Record<string, string> = {
-  Accept: "接收",
-  "Minor Revision": "小修",
-  "Major Revision": "大修",
-  Reject: "拒稿"
+  Accept: "接收（ACCEPT）",
+  "Minor Revision": "小修（MINOR REVISION）",
+  "Major Revision": "大修（MAJOR REVISION）",
+  Reject: "拒稿（REJECT）"
 };
 
 const progressNodeLabels: Record<string, string> = {
@@ -78,6 +78,10 @@ function renderValue(value: unknown): string {
 function renderDecisionValue(value: unknown): string {
   if (typeof value !== "string") return renderValue(value);
   return decisionLabels[value] ?? value;
+}
+
+function finalEditorialDecision(state?: ReviewState | null): unknown {
+  return state?.editorial_decision || state?.decision_trace?.final_decision || state?.final_decision;
 }
 
 function historyStatusLabel(status?: string): string {
@@ -235,6 +239,8 @@ function DecisionTracePanel({ trace }: { trace?: DecisionTrace }) {
 }
 
 function EditorDecisionPanel({ state }: { state?: ReviewState | null }) {
+  const decision = finalEditorialDecision(state);
+
   return (
     <section className="panel editor-decision-panel">
       <ScoringLogicDisclosure />
@@ -243,9 +249,9 @@ function EditorDecisionPanel({ state }: { state?: ReviewState | null }) {
           <h2>综合编辑决定</h2>
           <p className="muted">单独汇总最终决定、评分和本次决策轨迹。</p>
         </div>
-        <span className="status-pill">{renderDecisionValue(state?.editorial_decision)}</span>
+        <span className="status-pill">{renderDecisionValue(decision)}</span>
       </div>
-      <p className="decision">{renderDecisionValue(state?.editorial_decision)}</p>
+      <p className="decision">{renderDecisionValue(decision)}</p>
       <DecisionTracePanel trace={state?.decision_trace} />
       <ReportSection title="五维最终评分">
         <ScoreGrid scores={state?.dimension_scores} />
@@ -670,6 +676,15 @@ export default function App() {
       setError(event.status);
       stopActiveStream(source);
       return;
+    }
+    if (event.node === "synthesizer") {
+      try {
+        await loadResult(id);
+      } catch (err) {
+        if (selectedThreadRef.current === id) {
+          setError(err instanceof Error ? err.message : "读取综合编辑决定失败");
+        }
+      }
     }
     if (event.node === "__all__") {
       stopActiveStream(source);
